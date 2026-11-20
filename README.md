@@ -205,6 +205,18 @@ Wer eine veränderte Version als Netzwerkdienst anbietet, muss den Nutzern den
 Quellcode dieser Version zugänglich machen (§ 13 AGPL). Die Oberfläche verlinkt
 dazu unter *Einstellungen* auf den Quellcode.
 
+Die Lizenzen aller verwendeten Bibliotheken stehen in
+[`crates/web/licenses.html`](crates/web/licenses.html) und sind in der
+Anwendung unter *Einstellungen → Lizenzen von Drittanbietern* abrufbar
+(Webseite, Desktop-Client und Docker-Image). Die Datei wird beim Docker- und
+Desktop-Build automatisch neu erzeugt; nach Änderungen an Abhängigkeiten lokal
+aktualisieren mit:
+
+```bash
+cargo install cargo-about --locked --features cli
+cargo about generate --offline about.hbs -o crates/web/licenses.html
+```
+
 Das Docker-Image enthält zusätzlich `poppler-utils` (GPL) und Tesseract
 (Apache-2.0) aus den Debian-Paketen; sie werden als eigenständige Programme
 aufgerufen. Die Lizenzen der verwendeten Rust-Bibliotheken (überwiegend

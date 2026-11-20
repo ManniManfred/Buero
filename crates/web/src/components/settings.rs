@@ -63,6 +63,10 @@ pub fn Settings() -> impl IntoView {
                     <a href="#" on:click=|ev| { ev.prevent_default(); crate::api::open_external("https://www.gnu.org/licenses/agpl-3.0.html"); }>"GNU AGPL v3"</a>
                     " · "
                     <a href="#" on:click=|ev| { ev.prevent_default(); crate::api::open_external(SOURCE_URL); }>"Quellcode"</a>
+                    " · "
+                    <a href="#" on:click=move |ev| { ev.prevent_default(); crate::api::open_external(&c.api.url("/licenses.html")); }>
+                        "Lizenzen von Drittanbietern"
+                    </a>
                 </p>
                 <div class="row-buttons">
                     <button on:click=move |_| {

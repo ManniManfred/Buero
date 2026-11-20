@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Büro – Lizenzen von Drittanbietern</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 960px; margin: 0 auto; padding: 24px; line-height: 1.5; }
+  h1 { margin-bottom: 0; }
+  .overview { columns: 2; padding-left: 20px; }
+  .license { border-top: 1px solid #8884; margin-top: 32px; padding-top: 8px; }
+  .crates { font-size: 14px; }
+  pre { white-space: pre-wrap; font-size: 12px; background: #8881; padding: 12px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>Lizenzen von Drittanbietern</h1>
+<p>
+  <strong>Büro</strong> ist freie Software unter der
+  <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU Affero General Public License v3 (oder später)</a>,
+  Copyright © 2026 Manfred Roßkamp.
+  Es verwendet die folgenden Open-Source-Bibliotheken, deren Urheber wir hiermit nennen.
+  Das Docker-Image enthält außerdem Debian-Pakete (u. a. <em>poppler-utils</em>, GPL, und
+  <em>Tesseract OCR</em>, Apache-2.0); deren Lizenzen liegen im Image unter
+  <code>/usr/share/doc/&lt;paket&gt;/copyright</code>.
+</p>
+<h2>Übersicht</h2>
+<ul class="overview">
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<div class="license">
+  <h3 id="{{id}}">{{name}}</h3>
+  <p class="crates">Verwendet von:
+  {{#each used_by}}
+    <a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a>{{#unless @last}}, {{/unless}}
+  {{/each}}
+  </p>
+  <pre>{{text}}</pre>
+</div>
+{{/each}}
+</body>
+</html>

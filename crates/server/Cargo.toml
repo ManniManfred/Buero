@@ -2,6 +2,7 @@
 name = "buero-server"
 version.workspace = true
 edition.workspace = true
+publish = false
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

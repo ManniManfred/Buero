@@ -14,6 +14,8 @@ RUN set -eux; arch="$(uname -m)"; \
     url="https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-${arch}-unknown-linux-gnu.tar.gz"; \
     if curl -fsSL "$url" | tar -xz -C /usr/local/bin; then trunk --version; \
     else cargo install --locked trunk; fi
+# cargo-about: Liste der Drittanbieter-Lizenzen
+RUN cargo install --locked cargo-about --features cli
 
 WORKDIR /src
 # Abhängigkeiten zuerst (besseres Layer-Caching)
@@ -33,7 +35,9 @@ RUN mkdir -p crates/shared/src crates/server/src crates/web/src \
 COPY crates/shared crates/shared
 COPY crates/server crates/server
 COPY crates/web crates/web
-RUN touch crates/shared/src/lib.rs crates/server/src/main.rs crates/web/src/main.rs \
+COPY about.toml about.hbs ./
+RUN cargo about generate --offline about.hbs -o crates/web/licenses.html \
+ && touch crates/shared/src/lib.rs crates/server/src/main.rs crates/web/src/main.rs \
  && cd crates/web && trunk build --release \
  && cd /src && cargo build --release -p buero-server
 

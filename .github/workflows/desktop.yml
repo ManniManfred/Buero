@@ -34,7 +34,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: trunk,tauri-cli
+          tool: trunk,tauri-cli,cargo-about
+      - name: Drittanbieter-Lizenzen aktualisieren
+        run: cargo about generate --offline about.hbs -o crates/web/licenses.html
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
