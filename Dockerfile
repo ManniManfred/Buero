@@ -40,6 +40,12 @@ RUN touch crates/shared/src/lib.rs crates/server/src/main.rs crates/web/src/main
 # ---------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE}
 
+LABEL org.opencontainers.image.title="Büro" \
+      org.opencontainers.image.description="Dokumentenverwaltung" \
+      org.opencontainers.image.authors="Manfred Roßkamp" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.source="https://github.com/ManniManfred/Buero"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       poppler-utils tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng ca-certificates tini \

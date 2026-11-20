@@ -8,6 +8,9 @@ default-members = ["crates/server"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-or-later"
+authors = ["Manfred Roßkamp"]
+repository = "https://github.com/ManniManfred/Buero"
 
 [workspace.dependencies]
 shared = { path = "crates/shared" }

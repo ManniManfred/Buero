@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
 //! Inhaltsadressierte Dateiablage: `files/ab/abcdef…` (SHA-256).
 
 use std::path::{Path, PathBuf};

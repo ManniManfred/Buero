@@ -37,6 +37,9 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
+    "copyright": "Copyright (C) 2026 Manfred Roßkamp",
+    "license": "AGPL-3.0-or-later",
+    "licenseFile": "../../LICENSE",
     "shortDescription": "Dokumentenverwaltung"
   }
 }

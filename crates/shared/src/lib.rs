@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
 //! Gemeinsame Datentypen für Server, Web- und Desktop-Client.
 
 use serde::{Deserialize, Serialize};

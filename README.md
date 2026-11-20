@@ -158,3 +158,26 @@ TOKEN=$(curl -s -X POST https://buero.example.com/api/auth/login \
   -H 'content-type: application/json' -d '{"password":"…"}' | jq -r .token)
 curl -H "Authorization: Bearer $TOKEN" -F file=@scan.pdf https://buero.example.com/api/documents
 ```
+
+## Lizenz
+
+Copyright (C) 2026 Manfred Roßkamp
+
+Dieses Programm ist freie Software: Sie können es unter den Bedingungen der
+**GNU Affero General Public License**, wie von der Free Software Foundation
+veröffentlicht, weitergeben und/oder modifizieren, entweder gemäß Version 3
+der Lizenz oder (nach Ihrer Wahl) jeder späteren Version.
+
+Dieses Programm wird in der Hoffnung verbreitet, dass es nützlich sein wird,
+jedoch OHNE JEDE GEWÄHRLEISTUNG – sogar ohne die implizite Gewährleistung der
+MARKTFÄHIGKEIT oder EIGNUNG FÜR EINEN BESTIMMTEN ZWECK. Details stehen in der
+Datei [`LICENSE`](LICENSE).
+
+Wer eine veränderte Version als Netzwerkdienst anbietet, muss den Nutzern den
+Quellcode dieser Version zugänglich machen (§ 13 AGPL). Die Oberfläche verlinkt
+dazu unter *Einstellungen* auf den Quellcode.
+
+Das Docker-Image enthält zusätzlich `poppler-utils` (GPL) und Tesseract
+(Apache-2.0) aus den Debian-Paketen; sie werden als eigenständige Programme
+aufgerufen. Die Lizenzen der verwendeten Rust-Bibliotheken (überwiegend
+MIT/Apache-2.0) sind mit der AGPL vereinbar.

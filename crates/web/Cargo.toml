@@ -2,6 +2,9 @@
 name = "web"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 shared.workspace = true

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
 //! Volltextindex auf Basis von Tantivy.
 //!
 //! Der Index enthält nur, was für Suche, Filter und Sortierung gebraucht wird;

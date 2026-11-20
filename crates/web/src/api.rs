@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
 //! HTTP-Client für die Server-API (identisch für Web und Desktop).
 
 use gloo_net::http::{Request, RequestBuilder, Response};

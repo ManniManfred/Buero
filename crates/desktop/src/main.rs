@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
 //! Büro – Desktop-Client.
 //!
 //! Der Desktop-Client verwendet exakt dieselbe Oberfläche wie die Webseite

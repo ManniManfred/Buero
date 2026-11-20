@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
 use axum::body::Body;
 use axum::extract::{Multipart, Path, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};

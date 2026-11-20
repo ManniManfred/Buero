@@ -1,8 +1,14 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::is_desktop;
 use crate::state::ctx;
+
+/// Pflichtangabe nach § 13 AGPL: Bezugsquelle des Quellcodes
+const SOURCE_URL: &str = env!("CARGO_PKG_REPOSITORY");
 
 #[component]
 pub fn Settings() -> impl IntoView {
@@ -52,6 +58,12 @@ pub fn Settings() -> impl IntoView {
                     <li>"Tippfehler werden automatisch toleriert, wenn es keine exakten Treffer gibt."</li>
                 </ul>
                 <hr />
+                <p class="small muted">
+                    "Büro · Copyright © 2026 Manfred Roßkamp · Freie Software unter der "
+                    <a href="#" on:click=|ev| { ev.prevent_default(); crate::api::open_external("https://www.gnu.org/licenses/agpl-3.0.html"); }>"GNU AGPL v3"</a>
+                    " · "
+                    <a href="#" on:click=|ev| { ev.prevent_default(); crate::api::open_external(SOURCE_URL); }>"Quellcode"</a>
+                </p>
                 <div class="row-buttons">
                     <button on:click=move |_| {
                         spawn_local(async move {
