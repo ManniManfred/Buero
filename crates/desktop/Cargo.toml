@@ -1,0 +1,18 @@
+[package]
+name = "buero-desktop"
+version.workspace = true
+edition.workspace = true
+description = "Büro – Desktop-Client"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+# Von der Tauri-CLI im Release-Build gesetzt
+custom-protocol = ["tauri/custom-protocol"]

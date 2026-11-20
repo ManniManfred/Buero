@@ -1,0 +1,502 @@
+use axum::body::Body;
+use axum::extract::{Multipart, Path, Query, Request, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::Deserialize;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
+
+use shared::{
+    BulkUpdate, DocumentDetail, DocumentSummary, DocumentUpdate, ListResponse, SearchParams,
+    UploadResult,
+};
+
+use crate::db;
+use crate::error::{AppError, AppResult};
+use crate::search::Query_;
+use crate::state::AppState;
+use crate::storage::StagedFile;
+use crate::util::{self, now, parse_ids};
+
+pub async fn list(
+    State(st): State<AppState>,
+    Query(p): Query<SearchParams>,
+) -> AppResult<Json<ListResponse>> {
+    let started = std::time::Instant::now();
+    let q = Query_ {
+        text: p.q.chars().take(500).collect(),
+        collections: parse_ids(&p.collections),
+        tags: parse_ids(&p.tags),
+        kind: p.kind.clone(),
+        unfiled: p.unfiled,
+        sort: p.sort.clone(),
+        offset: p.offset,
+        limit: if p.limit == 0 { 50 } else { p.limit },
+    };
+    let st2 = st.clone();
+    let hits = tokio::task::spawn_blocking(move || st2.search.search(&q)).await??;
+    let ids: Vec<i64> = hits.ids.iter().map(|(id, _)| *id).collect();
+    let mut items = db::summaries(&st.pool, &ids).await?;
+
+    if !p.q.trim().is_empty() && !items.is_empty() {
+        let texts = db::contents(&st.pool, &ids).await?;
+        let st2 = st.clone();
+        let qtext = p.q.clone();
+        let (snips, hits) =
+            tokio::task::spawn_blocking(move || (st2.search.snippets(&hits, &qtext, &texts), hits)).await?;
+        for it in items.iter_mut() {
+            it.snippet = snips.iter().find(|(id, _)| *id == it.id).map(|(_, s)| s.clone());
+            it.score = hits.ids.iter().find(|(id, _)| *id == it.id).and_then(|(_, s)| *s);
+        }
+        return Ok(Json(ListResponse {
+            total: hits.total as u64,
+            items,
+            took_ms: started.elapsed().as_secs_f64() * 1000.0,
+            fuzzy: hits.fuzzy,
+        }));
+    }
+    Ok(Json(ListResponse {
+        total: hits.total as u64,
+        items,
+        took_ms: started.elapsed().as_secs_f64() * 1000.0,
+        fuzzy: hits.fuzzy,
+    }))
+}
+
+pub async fn get(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<DocumentDetail>> {
+    let row = db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    let summary = db::summary(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    let content_length: i64 = sqlx::query_scalar("SELECT length(content) FROM documents WHERE id = ?")
+        .bind(id)
+        .fetch_one(&st.pool)
+        .await?;
+    Ok(Json(DocumentDetail {
+        summary,
+        description: row.description,
+        extract_error: row.extract_error,
+        content_length,
+        versions: db::versions(&st.pool, id).await?,
+    }))
+}
+
+fn guess_mime(filename: &str, declared: Option<&str>) -> String {
+    match mime_guess::from_path(filename).first() {
+        Some(m) => m.essence_str().to_string(),
+        None => declared
+            .filter(|m| !m.is_empty())
+            .unwrap_or("application/octet-stream")
+            .to_string(),
+    }
+}
+
+struct Upload {
+    staged: StagedFile,
+    filename: String,
+    mime: String,
+}
+
+/// Multipart-Upload: beliebig viele Felder `file`, optional `collection_ids`,
+/// `tag_ids` (kommagetrennt), `title` und `document_date`.
+pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<Json<Vec<UploadResult>>> {
+    let mut uploads: Vec<Upload> = Vec::new();
+    let mut collections = Vec::new();
+    let mut tags = Vec::new();
+    let mut title: Option<String> = None;
+    let mut date: Option<String> = None;
+
+    let res: AppResult<()> = async {
+        while let Some(field) = mp.next_field().await? {
+            let name = field.name().unwrap_or("").to_string();
+            match name.as_str() {
+                "file" | "files" | "file[]" => {
+                    let filename = field
+                        .file_name()
+                        .map(sanitize_filename)
+                        .unwrap_or_else(|| "upload".into());
+                    let mime = guess_mime(&filename, field.content_type());
+                    let staged = st
+                        .storage
+                        .stage(Box::pin(field), st.config.max_upload_bytes)
+                        .await
+                        .map_err(|e| AppError::bad_request(format!("{filename}: {e}")))?;
+                    uploads.push(Upload { staged, filename, mime });
+                }
+                "collection_ids" => collections = parse_ids(&field.text().await?),
+                "tag_ids" => tags = parse_ids(&field.text().await?),
+                "title" => title = Some(field.text().await?).filter(|t| !t.trim().is_empty()),
+                "document_date" => {
+                    date = Some(field.text().await?).filter(|d| util::valid_date(d))
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(e) = res {
+        for u in &uploads {
+            st.storage.discard(&u.staged).await;
+        }
+        return Err(e);
+    }
+    if uploads.is_empty() {
+        return Err(AppError::bad_request("Keine Datei übermittelt"));
+    }
+
+    let single = uploads.len() == 1;
+    let mut results = Vec::with_capacity(uploads.len());
+    let mut touched = Vec::new();
+    for u in uploads {
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT document_id FROM document_versions WHERE sha256 = ? ORDER BY id LIMIT 1",
+        )
+        .bind(&u.staged.sha256)
+        .fetch_optional(&st.pool)
+        .await?;
+
+        let (id, duplicate) = if let Some(id) = existing {
+            st.storage.discard(&u.staged).await;
+            (id, true)
+        } else {
+            st.storage.commit(&u.staged).await?;
+            let ts = now();
+            let ext = util::extension_of(&u.filename);
+            let doc_title = if single { title.clone() } else { None }
+                .unwrap_or_else(|| util::title_from_filename(&u.filename));
+            let mut tx = st.pool.begin().await?;
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO documents (title, original_filename, mime, extension, size, sha256, version, \
+                 created_at, updated_at, document_date) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?) RETURNING id",
+            )
+            .bind(&doc_title)
+            .bind(&u.filename)
+            .bind(&u.mime)
+            .bind(&ext)
+            .bind(u.staged.size)
+            .bind(&u.staged.sha256)
+            .bind(ts)
+            .bind(ts)
+            .bind(&date)
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO document_versions (document_id, version, original_filename, size, sha256, created_at) \
+                 VALUES (?, 1, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(&u.filename)
+            .bind(u.staged.size)
+            .bind(&u.staged.sha256)
+            .bind(ts)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            (id, false)
+        };
+        // Zuordnungen auch bei Duplikaten ergänzen
+        for c in &collections {
+            sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT ?, id FROM collections WHERE id = ?")
+                .bind(id).bind(c).execute(&st.pool).await?;
+        }
+        for t in &tags {
+            sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) SELECT ?, id FROM tags WHERE id = ?")
+                .bind(id).bind(t).execute(&st.pool).await?;
+        }
+        touched.push(id);
+        if !duplicate {
+            let _ = st.jobs.send(id);
+        }
+        results.push((id, duplicate));
+    }
+    st.reindex(&touched).await?;
+
+    let summaries = db::summaries(&st.pool, &touched).await?;
+    Ok(Json(
+        results
+            .into_iter()
+            .filter_map(|(id, duplicate)| {
+                summaries
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| UploadResult { document: s.clone(), duplicate })
+            })
+            .collect(),
+    ))
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = base.chars().filter(|c| !c.is_control()).collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() { "upload".into() } else { cleaned.chars().take(255).collect() }
+}
+
+pub async fn new_version(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    mut mp: Multipart,
+) -> AppResult<Json<DocumentSummary>> {
+    let doc = db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    let mut upload = None;
+    while let Some(field) = mp.next_field().await? {
+        if field.name() == Some("file") {
+            let filename = field.file_name().map(sanitize_filename).unwrap_or_else(|| doc.original_filename.clone());
+            let mime = guess_mime(&filename, field.content_type());
+            let staged = st
+                .storage
+                .stage(Box::pin(field), st.config.max_upload_bytes)
+                .await
+                .map_err(|e| AppError::bad_request(e.to_string()))?;
+            upload = Some(Upload { staged, filename, mime });
+            break;
+        }
+    }
+    let u = upload.ok_or_else(|| AppError::bad_request("Keine Datei übermittelt"))?;
+    if u.staged.sha256 == doc.sha256 {
+        st.storage.discard(&u.staged).await;
+        return db::summary(&st.pool, id).await?.map(Json).ok_or_else(AppError::not_found);
+    }
+    st.storage.commit(&u.staged).await?;
+    let ts = now();
+    let version = doc.version + 1;
+    let mut tx = st.pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO document_versions (document_id, version, original_filename, size, sha256, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(version)
+    .bind(&u.filename)
+    .bind(u.staged.size)
+    .bind(&u.staged.sha256)
+    .bind(ts)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE documents SET original_filename = ?, mime = ?, extension = ?, size = ?, sha256 = ?, version = ?, \
+         updated_at = ?, extract_status = 'pending', extract_error = NULL, has_thumbnail = 0 WHERE id = ?",
+    )
+    .bind(&u.filename)
+    .bind(&u.mime)
+    .bind(util::extension_of(&u.filename))
+    .bind(u.staged.size)
+    .bind(&u.staged.sha256)
+    .bind(version)
+    .bind(ts)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let _ = tokio::fs::remove_file(st.storage.thumb_path(id)).await;
+    let _ = st.jobs.send(id);
+    db::summary(&st.pool, id).await?.map(Json).ok_or_else(AppError::not_found)
+}
+
+pub async fn update(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(u): Json<DocumentUpdate>,
+) -> AppResult<Json<DocumentSummary>> {
+    db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    let mut tx = st.pool.begin().await?;
+    if let Some(t) = u.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        sqlx::query("UPDATE documents SET title = ? WHERE id = ?").bind(t).bind(id).execute(&mut *tx).await?;
+    }
+    if let Some(d) = &u.description {
+        sqlx::query("UPDATE documents SET description = ? WHERE id = ?").bind(d).bind(id).execute(&mut *tx).await?;
+    }
+    if let Some(d) = &u.document_date {
+        let v = if d.trim().is_empty() {
+            None
+        } else if util::valid_date(d) {
+            Some(d.trim().to_string())
+        } else {
+            return Err(AppError::bad_request("Ungültiges Datum (erwartet JJJJ-MM-TT)"));
+        };
+        sqlx::query("UPDATE documents SET document_date = ? WHERE id = ?").bind(v).bind(id).execute(&mut *tx).await?;
+    }
+    if let Some(cs) = &u.collection_ids {
+        sqlx::query("DELETE FROM document_collections WHERE document_id = ?").bind(id).execute(&mut *tx).await?;
+        for c in cs {
+            sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT ?, id FROM collections WHERE id = ?")
+                .bind(id).bind(c).execute(&mut *tx).await?;
+        }
+    }
+    if let Some(ts) = &u.tag_ids {
+        sqlx::query("DELETE FROM document_tags WHERE document_id = ?").bind(id).execute(&mut *tx).await?;
+        for t in ts {
+            sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) SELECT ?, id FROM tags WHERE id = ?")
+                .bind(id).bind(t).execute(&mut *tx).await?;
+        }
+    }
+    sqlx::query("UPDATE documents SET updated_at = ? WHERE id = ?").bind(now()).bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    st.reindex(&[id]).await?;
+    db::summary(&st.pool, id).await?.map(Json).ok_or_else(AppError::not_found)
+}
+
+async fn delete_docs(st: &AppState, ids: &[i64]) -> AppResult<()> {
+    for &id in ids {
+        let shas: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT sha256 FROM document_versions WHERE document_id = ?")
+                .bind(id)
+                .fetch_all(&st.pool)
+                .await?;
+        sqlx::query("DELETE FROM documents WHERE id = ?").bind(id).execute(&st.pool).await?;
+        for sha in shas {
+            if !db::sha_in_use(&st.pool, &sha).await? {
+                st.storage.remove(&sha).await;
+            }
+        }
+        let _ = tokio::fs::remove_file(st.storage.thumb_path(id)).await;
+        st.search.delete(id);
+    }
+    let st2 = st.clone();
+    tokio::task::spawn_blocking(move || st2.search.commit()).await??;
+    Ok(())
+}
+
+pub async fn delete(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<StatusCode> {
+    delete_docs(&st, &[id]).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn bulk(State(st): State<AppState>, Json(b): Json<BulkUpdate>) -> AppResult<StatusCode> {
+    if b.delete {
+        delete_docs(&st, &b.ids).await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let mut tx = st.pool.begin().await?;
+    for &id in &b.ids {
+        for c in &b.add_collections {
+            sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT d.id, c.id FROM documents d, collections c WHERE d.id = ? AND c.id = ?")
+                .bind(id).bind(c).execute(&mut *tx).await?;
+        }
+        for c in &b.remove_collections {
+            sqlx::query("DELETE FROM document_collections WHERE document_id = ? AND collection_id = ?")
+                .bind(id).bind(c).execute(&mut *tx).await?;
+        }
+        for t in &b.add_tags {
+            sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) SELECT d.id, t.id FROM documents d, tags t WHERE d.id = ? AND t.id = ?")
+                .bind(id).bind(t).execute(&mut *tx).await?;
+        }
+        for t in &b.remove_tags {
+            sqlx::query("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?")
+                .bind(id).bind(t).execute(&mut *tx).await?;
+        }
+    }
+    tx.commit().await?;
+    st.reindex(&b.ids).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn reprocess(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<StatusCode> {
+    let n = sqlx::query("UPDATE documents SET extract_status = 'pending', extract_error = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&st.pool)
+        .await?
+        .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found());
+    }
+    let _ = st.jobs.send(id);
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Deserialize)]
+pub struct FileParams {
+    #[serde(default)]
+    download: bool,
+    version: Option<i64>,
+}
+
+fn content_disposition(inline: bool, filename: &str) -> HeaderValue {
+    let ascii: String = filename
+        .chars()
+        .map(|c| if c.is_ascii() && c != '"' && !c.is_control() { c } else { '_' })
+        .collect();
+    let encoded = percent_encoding::utf8_percent_encode(filename, percent_encoding::NON_ALPHANUMERIC);
+    let v = format!(
+        "{}; filename=\"{}\"; filename*=UTF-8''{}",
+        if inline { "inline" } else { "attachment" },
+        ascii,
+        encoded
+    );
+    HeaderValue::from_str(&v).unwrap_or_else(|_| HeaderValue::from_static("attachment"))
+}
+
+pub async fn file(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(p): Query<FileParams>,
+    req: Request,
+) -> AppResult<Response> {
+    let doc = db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    let (sha, filename) = match p.version {
+        Some(v) if v != doc.version => {
+            let row: Option<(String, String)> = sqlx::query_as(
+                "SELECT sha256, original_filename FROM document_versions WHERE document_id = ? AND version = ?",
+            )
+            .bind(id)
+            .bind(v)
+            .fetch_optional(&st.pool)
+            .await?;
+            row.ok_or_else(AppError::not_found)?
+        }
+        _ => (doc.sha256.clone(), doc.original_filename.clone()),
+    };
+    let mime = guess_mime(&filename, Some(&doc.mime));
+    let mut res = serve(st.storage.file_path(&sha), &mime, req).await?;
+    res.headers_mut()
+        .insert(header::CONTENT_DISPOSITION, content_disposition(!p.download, &filename));
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
+    res.headers_mut()
+        .insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    // Aktive Inhalte (HTML, SVG, XML) nicht im Kontext der App ausführen.
+    // (Nicht für PDF: Chrome zeigt PDFs in Sandbox-Kontexten nicht an.)
+    if mime.contains("html") || mime.contains("svg") || mime.contains("xml") || mime.contains("javascript") {
+        res.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("sandbox; default-src 'none'; img-src * data:; style-src 'unsafe-inline'"),
+        );
+    }
+    Ok(res)
+}
+
+pub async fn thumbnail(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    req: Request,
+) -> AppResult<Response> {
+    let path = st.storage.thumb_path(id);
+    if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        return Err(AppError::not_found());
+    }
+    let mut res = serve(path, "image/jpeg", req).await?;
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
+    Ok(res)
+}
+
+async fn serve(path: std::path::PathBuf, mime: &str, req: Request) -> AppResult<Response> {
+    let mime = mime.parse().unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM);
+    let res = match ServeFile::new_with_mime(path, &mime).oneshot(req).await {
+        Ok(r) => r,
+        Err(never) => match never {},
+    };
+    if res.status() == StatusCode::NOT_FOUND {
+        return Err(AppError::not_found());
+    }
+    Ok(res.map(Body::new))
+}
+
+pub async fn text(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<Response> {
+    let content: Option<String> = sqlx::query_scalar("SELECT content FROM documents WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&st.pool)
+        .await?;
+    let content = content.ok_or_else(AppError::not_found)?;
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], content).into_response())
+}

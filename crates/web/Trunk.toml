@@ -1,0 +1,10 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[serve]
+port = 8081
+
+# Im Entwicklungsmodus (trunk serve) API-Aufrufe an den lokalen Server weiterleiten
+[[proxy]]
+backend = "http://127.0.0.1:8080/api/"

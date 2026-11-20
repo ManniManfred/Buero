@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/shared", "crates/server", "crates/web", "crates/desktop"]
+# Standard-Build (cargo build) baut nur den Server; Web (wasm) wird mit trunk,
+# Desktop mit tauri gebaut.
+default-members = ["crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+shared = { path = "crates/shared" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.release.package.web]
+opt-level = "z"
