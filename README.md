@@ -57,15 +57,43 @@ Standardprogramm des Systems).
    - Container HTTP Port: `80` (Standard)
 3. Unter *HTTP Settings* HTTPS aktivieren und erzwingen. Für große Uploads ggf.
    in der NGINX-Konfiguration `client_max_body_size 1024m;` setzen.
-4. Deployen – eine der beiden Varianten:
-   - **Fertiges Image** (empfohlen, schont den Server): Bei jedem Push auf `main`
-     baut GitHub Actions `ghcr.io/<github-user>/buero:latest`
-     (`.github/workflows/docker.yml`). In CapRover unter *Deployment* →
-     *Deploy via ImageName* eintragen. Bei privatem Paket vorher die Registry
-     in CapRover hinterlegen.
-   - **Aus dem Quellcode**: `caprover deploy` im Projektordner (nutzt
-     `captain-definition` + `Dockerfile`). Achtung: Der Rust-Build braucht
-     einige Minuten und ca. 2–4 GB RAM.
+4. Deployen – siehe nächster Abschnitt.
+
+### Kontinuierliches Deployment (empfohlen)
+
+Bei jedem Push auf `main` baut GitHub Actions das Image
+(`ghcr.io/mannimanfred/buero`) und rollt es automatisch auf CapRover aus
+(`.github/workflows/docker.yml`). Der CapRover-Server muss dafür nichts
+kompilieren.
+
+Einmalige Einrichtung:
+
+1. **Image öffentlich machen**: GitHub → Profil → *Packages* → `buero` →
+   *Package settings* → *Change visibility* → *Public*. (Das Paket erscheint
+   nach dem ersten Workflow-Lauf.) Alternativ privat lassen und in CapRover
+   unter *Cluster* → *Docker Registries* `ghcr.io` mit GitHub-Benutzername und
+   einem Personal Access Token (Recht `read:packages`) eintragen.
+2. **App-Token in CapRover**: App `buero` → *Deployment* → *Method 1: Official
+   CLI* → *Enable App Token* → Token kopieren.
+3. **Secrets in GitHub**: Repository → *Settings* → *Secrets and variables* →
+   *Actions* → *New repository secret*:
+
+   | Secret | Beispiel |
+   |---|---|
+   | `CAPROVER_SERVER` | `https://captain.deine-domain.de` |
+   | `CAPROVER_APP` | `buero` |
+   | `CAPROVER_APP_TOKEN` | Token aus Schritt 2 |
+
+4. Workflow einmal starten (*Actions* → *Docker-Image & CapRover-Deploy* →
+   *Run workflow*) oder einfach auf `main` pushen.
+
+Jedes Deployment verwendet ein Image mit Commit-Kennung (`sha-abc1234`), in
+CapRover ist so unter *Deployment* jede Version nachvollziehbar und per
+*Revert* zurückrollbar. Fehlen die Secrets, wird nur das Image gebaut.
+
+Alternativ ohne GitHub Actions: `caprover deploy` im Projektordner baut über
+`captain-definition` + `Dockerfile` direkt auf dem Server (braucht einige
+Minuten und ca. 2–4 GB RAM).
 
 ### Konfiguration (Umgebungsvariablen)
 
