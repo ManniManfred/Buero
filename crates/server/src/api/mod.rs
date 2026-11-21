@@ -16,6 +16,7 @@ use crate::error::AppResult;
 use crate::state::AppState;
 
 mod auth;
+pub(crate) mod backup;
 mod collections;
 pub(crate) mod documents;
 mod office;
@@ -49,6 +50,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/stats", get(stats))
         .route("/api/admin/reindex", post(reindex))
         .route("/api/admin/reprocess-failed", post(reprocess_failed))
+        .route("/api/admin/backup", get(backup::backup))
+        .route("/api/admin/restore", post(backup::restore).layer(DefaultBodyLimit::disable()))
         .route("/api/auth/logout", post(auth::logout))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::require_auth));
 

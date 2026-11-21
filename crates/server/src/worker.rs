@@ -10,10 +10,20 @@ use tokio::sync::{mpsc, Semaphore};
 use crate::extract::{self, ExtractOptions};
 use crate::state::AppState;
 
-pub fn spawn(state: AppState, mut rx: mpsc::UnboundedReceiver<i64>) {
-    let sem = Arc::new(Semaphore::new(state.config.workers));
+/// Startet die Verarbeitung; endet mit `state.restart` erst, wenn alle
+/// laufenden Aufträge fertig sind.
+pub fn spawn(state: AppState, mut rx: mpsc::UnboundedReceiver<i64>) -> tokio::task::JoinHandle<()> {
+    let workers = state.config.workers;
+    let sem = Arc::new(Semaphore::new(workers));
     tokio::spawn(async move {
-        while let Some(id) = rx.recv().await {
+        loop {
+            let id = tokio::select! {
+                _ = state.restart.cancelled() => break,
+                id = rx.recv() => match id {
+                    Some(id) => id,
+                    None => break,
+                },
+            };
             let permit = sem.clone().acquire_owned().await.expect("semaphore");
             let st = state.clone();
             tokio::spawn(async move {
@@ -30,7 +40,8 @@ pub fn spawn(state: AppState, mut rx: mpsc::UnboundedReceiver<i64>) {
                 }
             });
         }
-    });
+        let _ = sem.acquire_many(workers as u32).await;
+    })
 }
 
 /// Unvollständige Aufträge nach einem Neustart wieder einreihen.

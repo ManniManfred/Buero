@@ -331,3 +331,13 @@ pub fn extension_of(name: &str) -> &str {
         _ => "",
     }
 }
+
+/// Ergebnis einer vorbereiteten Wiederherstellung (der Server startet danach neu).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RestoreResult {
+    pub documents: i64,
+    /// Dokumentdateien, die im Backup fehlen
+    pub missing_files: i64,
+    /// Zeitpunkt des Backups
+    pub created_at: Option<i64>,
+}

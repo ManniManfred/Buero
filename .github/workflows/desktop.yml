@@ -42,6 +42,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUERO_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         with:
           projectPath: crates/desktop
           tauriScript: cargo tauri

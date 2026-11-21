@@ -83,7 +83,7 @@ pub fn Sidebar() -> impl IntoView {
     view! {
         <aside class="sidebar">
             <div class="brand">
-                <span class="brand-name"><Icon name="logo" class="brand-logo" />"Büro"</span>
+                <span class="brand-name"><Icon name="logo" class="brand-logo" />"Büro"<span class="brand-version" title="Version">{crate::util::version()}</span></span>
                 <button class="icon" title="Einstellungen" on:click=move |_| c.show_settings.set(true)><Icon name="settings" /></button>
             </div>
             <nav>

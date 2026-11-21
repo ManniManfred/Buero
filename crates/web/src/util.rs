@@ -43,3 +43,11 @@ pub fn status_label(s: &str) -> &'static str {
 pub const COLORS: &[&str] = &[
     "", "#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899", "#64748b",
 ];
+
+/// Programmversion; Release-Builds setzen `BUERO_VERSION` aus dem Git-Tag (`v0.2.0`).
+pub fn version() -> &'static str {
+    match option_env!("BUERO_VERSION").map(|v| v.trim().trim_start_matches('v')) {
+        Some(v) if !v.is_empty() => v,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}

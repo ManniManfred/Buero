@@ -55,6 +55,7 @@ pub fn Settings() -> impl IntoView {
                     });
                 }>"Fehlgeschlagene erneut verarbeiten"</button>
                 <hr />
+                <BackupSection />                <hr />
                 <h3>"Suche – Tipps"</h3>
                 <ul class="small tips">
                     <li><code>"rechnung strom"</code>" – alle Wörter müssen vorkommen, das letzte auch als Wortanfang"</li>
@@ -66,7 +67,7 @@ pub fn Settings() -> impl IntoView {
                 </ul>
                 <hr />
                 <p class="small muted">
-                    "Büro · Copyright © 2026 Manfred Roßkamp · Freie Software unter der "
+                    "Büro "{crate::util::version()}" · Copyright © 2026 Manfred Roßkamp · Freie Software unter der "
                     <a href="#" on:click=|ev| { ev.prevent_default(); crate::api::open_external("https://www.gnu.org/licenses/agpl-3.0.html"); }>"GNU AGPL v3"</a>
                     " · "
                     <a href="#" on:click=|ev| { ev.prevent_default(); crate::api::open_external(SOURCE_URL); }>"Quellcode"</a>
@@ -88,4 +89,91 @@ pub fn Settings() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Backup herunterladen und aus einem Backup wiederherstellen.
+#[component]
+fn BackupSection() -> impl IntoView {
+    let c = ctx();
+    let input = NodeRef::<leptos::html::Input>::new();
+    let busy = RwSignal::new(false);
+
+    let download = move |ev: leptos::ev::MouseEvent| {
+        // Der Download läuft am Browser vorbei, im Desktop-Client im Standardbrowser
+        if is_desktop() {
+            ev.prevent_default();
+            crate::api::open_external(&c.api.file_url("/api/admin/backup"));
+        }
+    };
+
+    let restore = move |_| {
+        let Some(i) = input.get() else { return };
+        let Some(file) = i.files().and_then(|f| f.get(0)) else { return };
+        i.set_value("");
+        let msg = format!(
+            "Alle Dokumente, Sammlungen, Schlagwörter und Freigaben werden durch den Stand aus „{}“ ersetzt. \
+             Der bisherige Stand bleibt auf dem Server im Ordner „vor-wiederherstellung“. Fortfahren?",
+            file.name()
+        );
+        if !window().confirm_with_message(&msg).unwrap_or(false) {
+            return;
+        }
+        busy.set(true);
+        spawn_local(async move {
+            match c.api.post_file::<shared::RestoreResult>("/api/admin/restore", &file).await {
+                Ok(r) => {
+                    let mut m = format!("Backup mit {} Dokument(en) wird eingespielt, der Server startet neu …", r.documents);
+                    if r.missing_files > 0 {
+                        m.push_str(&format!(" Achtung: {} Datei(en) fehlen im Backup.", r.missing_files));
+                    }
+                    c.notify(m, r.missing_files > 0);
+                    wait_and_reload(c.api);
+                }
+                Err(e) => {
+                    busy.set(false);
+                    c.notify(format!("Wiederherstellung fehlgeschlagen: {e}"), true);
+                }
+            }
+        });
+    };
+
+    view! {
+        <h3>"Datensicherung"</h3>
+        <p class="muted small">
+            "Das Backup enthält alle Dokumente mit ihren Versionen, Sammlungen, Schlagwörter, Freigaben "
+            "und den Schlüssel für Freigabelinks. Der Suchindex wird nach dem Einspielen neu aufgebaut."
+        </p>
+        <a class="button" href=move || c.api.file_url("/api/admin/backup") download="" on:click=download>
+            <crate::icons::Icon name="download" />"Backup herunterladen"
+        </a>
+        <button disabled=move || busy.get() on:click=move |_| { if let Some(i) = input.get() { i.click(); } }>
+            <crate::icons::Icon name="upload" />
+            {move || if busy.get() { "Wird eingespielt …" } else { "Aus Backup wiederherstellen" }}
+        </button>
+        <input type="file" accept=".tar,application/x-tar" style="display:none" node_ref=input on:change=restore />
+    }
+}
+
+/// Wartet, bis der Server nach dem Neustart wieder antwortet, und lädt dann neu.
+fn wait_and_reload(api: crate::api::Api) {
+    spawn_local(async move {
+        let url = api.url("/api/health");
+        for _ in 0..120 {
+            sleep_ms(1_000).await;
+            if let Ok(r) = gloo_net::http::Request::get(&url).send().await {
+                if r.ok() {
+                    let _ = window().location().reload();
+                    return;
+                }
+            }
+        }
+        let _ = window().location().reload();
+    });
+}
+
+async fn sleep_ms(ms: i32) {
+    let p = js_sys::Promise::new(&mut |resolve, _| {
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 }

@@ -24,6 +24,10 @@ pub struct Inner {
     /// Server-Schlüssel für signierte Links (`secret.key` im Datenverzeichnis)
     pub secret: Vec<u8>,
     pub http: reqwest::Client,
+    /// Wird ausgelöst, um den Server im selben Prozess neu zu starten (nach einer Wiederherstellung)
+    pub restart: tokio_util::sync::CancellationToken,
+    /// Eine Wiederherstellung ist vorbereitet oder läuft
+    pub restoring: std::sync::atomic::AtomicBool,
 }
 
 impl std::ops::Deref for AppState {

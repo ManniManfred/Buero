@@ -49,6 +49,8 @@ Standardprogramm des Systems).
   Untersammlungen) für Leute ohne Zugang – wahlweise mit Passwort, Ablaufdatum
   und (bei Sammlungen) Upload-Möglichkeit, z. B. für den Steuerberater. Links
   lassen sich jederzeit widerrufen; Büro zählt die Aufrufe.
+- **Datensicherung**: Backup als tar-Archiv herunterladen und wieder einspielen,
+  direkt in der Oberfläche.
 - **Bearbeiten mit Euro-Office** (OnlyOffice-kompatibel): Word-, Excel- und
   PowerPoint-Dateien sowie OpenDocument direkt im Browser bearbeiten. Beim
   Schließen (oder mit „Speichern“) legt Büro eine neue Version an.
@@ -150,10 +152,32 @@ Euro-Office – jeweils als neue Version.
 
 Alles liegt in `/data`:
 `buero.db` (SQLite: Metadaten, erkannter Text), `files/` (Originaldateien, nach
-SHA-256 abgelegt), `thumbs/` und `index/` (beide jederzeit neu erzeugbar). Für
-ein Backup genügt es, `buero.db*`, `files/` und `secret.key` (Schlüssel für
-signierte Links) zu sichern. Fehlt der Suchindex,
-wird er beim Start automatisch neu aufgebaut.
+SHA-256 abgelegt), `secret.key` (Schlüssel für signierte Links), `thumbs/` und
+`index/` (beide jederzeit neu erzeugbar).
+
+**In der Oberfläche** (Einstellungen → Datensicherung):
+
+- **Backup herunterladen** liefert ein tar-Archiv (`buero-backup-JJJJ-MM-TT.tar`)
+  mit einer konsistenten Kopie der Datenbank, allen Dateien, Vorschaubildern und
+  `secret.key`. Das Archiv wird direkt gestreamt und braucht auf dem Server keinen
+  zusätzlichen Platz. Das Backup kann während des Betriebs erstellt werden.
+- **Aus Backup wiederherstellen** lädt ein solches Archiv hoch und prüft es:
+  Format, Datenbank-Integrität und ob die Büro-Version zur Datenbank passt.
+  Danach startet der Server im selben Prozess neu, übernimmt den Stand und baut
+  den Suchindex neu auf. Wer angemeldet ist, bleibt angemeldet. Der bisherige
+  Stand bleibt in `/data/vor-wiederherstellung/` liegen. Dort kann man ihn
+  löschen, sobald alles passt. Er wird bei der nächsten Wiederherstellung ersetzt.
+
+Per Kommandozeile geht das Gleiche:
+
+```bash
+curl -fH "Authorization: Bearer $TOKEN" -o backup.tar https://buero.example.com/api/admin/backup
+curl -fH "Authorization: Bearer $TOKEN" --data-binary @backup.tar https://buero.example.com/api/admin/restore
+```
+
+Alternativ genügt es, `buero.db*`, `files/` und `secret.key` bei gestopptem
+Server zu kopieren. Fehlt der Suchindex, wird er beim Start automatisch neu
+aufgebaut.
 
 ## Desktop-Client
 
@@ -219,6 +243,8 @@ Alle Endpunkte (außer Anmeldung/Status) erwarten `Authorization: Bearer <token>
 | `GET/POST` | `/api/shares[?document_id=&collection_id=]` · `DELETE /api/shares/{id}` | Freigabelinks |
 | `GET` | `/api/features` · `/api/office/config/{id}` | Aktive Zusatzfunktionen · Euro-Office-Editor-Konfiguration |
 | `POST` | `/api/admin/reindex` · `/api/admin/reprocess-failed` | Wartung |
+| `GET` | `/api/admin/backup` | Backup als tar-Archiv |
+| `POST` | `/api/admin/restore` | Backup einspielen (Archiv als Anfragekörper), danach Neustart |
 
 Ohne Anmeldung erreichbar (über Token, Passwort-Schlüssel bzw. signierte
 Links geschützt): `/api/public/shares/{token}…` für Freigabelinks (Seite

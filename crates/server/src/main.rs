@@ -34,6 +34,22 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("BUERO_PASSWORD ist nicht gesetzt – die Anwendung ist OHNE Anmeldung erreichbar!");
     }
 
+    loop {
+        if api::backup::apply_pending(&config.data_dir).await? {
+            tracing::info!(
+                "Wiederherstellung übernommen – bisheriger Stand liegt in {}/",
+                api::backup::PREVIOUS_DIR
+            );
+        }
+        if !run(&config).await? {
+            return Ok(());
+        }
+        tracing::info!("Server startet für die Wiederherstellung neu …");
+    }
+}
+
+/// Startet den Server; `true`, wenn er für eine Wiederherstellung neu starten soll.
+async fn run(config: &config::Config) -> anyhow::Result<bool> {
     let pool = db::connect(&config.data_dir).await?;
     let storage = storage::Storage::new(&config.data_dir).await?;
     let (search, fresh_index) = search::SearchIndex::open(&config.data_dir.join("index"))?;
@@ -49,24 +65,45 @@ async fn main() -> anyhow::Result<()> {
         _ => {}
     }
 
+    let restart = tokio_util::sync::CancellationToken::new();
     let state = state::AppState {
-        inner: Arc::new(state::Inner { config: config.clone(), pool, storage, search, jobs: tx, secret, http }),
+        inner: Arc::new(state::Inner {
+            config: config.clone(),
+            pool,
+            storage,
+            search,
+            jobs: tx,
+            secret,
+            http,
+            restart: restart.clone(),
+            restoring: Default::default(),
+        }),
     };
 
     if fresh_index {
         let n = state.reindex_all().await?;
         tracing::info!("Suchindex neu aufgebaut ({n} Dokumente)");
     }
-    worker::spawn(state.clone(), rx);
+    let worker = worker::spawn(state.clone(), rx);
     worker::requeue_pending(&state).await?;
 
-    let app = api::router(state);
+    let app = api::router(state.clone());
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!("Büro-Server läuft auf http://{}", config.bind);
+    let stop = restart.clone();
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
+        .with_graceful_shutdown(async move {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = stop.cancelled() => {}
+            }
         })
         .await?;
-    Ok(())
+
+    // Laufende Verarbeitungen abwarten, danach Datenbank und Index freigeben
+    let restarting = restart.is_cancelled() && state.restoring.load(std::sync::atomic::Ordering::SeqCst);
+    restart.cancel();
+    let _ = worker.await;
+    state.pool.close().await;
+    Ok(restarting)
 }

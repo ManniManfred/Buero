@@ -152,6 +152,17 @@ impl Api {
         self.check(r).await.map(|_| ())
     }
 
+    /// Sendet eine Datei unverändert als Anfragekörper (z. B. ein Backup).
+    pub async fn post_file<T: DeserializeOwned>(&self, path: &str, file: &web_sys::File) -> Result<T, String> {
+        let req = self
+            .builder("POST", path)
+            .header("Content-Type", "application/octet-stream")
+            .body(file.clone())
+            .map_err(|e| e.to_string())?;
+        let r = req.send().await;
+        self.check(r).await?.json().await.map_err(|e| e.to_string())
+    }
+
     pub async fn upload<T: DeserializeOwned>(&self, path: &str, form: web_sys::FormData) -> Result<T, String> {
         let req = self.builder("POST", path).body(form).map_err(|e| e.to_string())?;
         let r = req.send().await;
