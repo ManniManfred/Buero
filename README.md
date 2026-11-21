@@ -45,6 +45,13 @@ Standardprogramm des Systems).
     oder für viele Dokumente gleichzeitig (Mehrfachauswahl).
 - **Versionen**: bearbeitete Dateien als neue Version hochladen; alte Versionen
   bleiben abrufbar.
+- **Freigaben**: Links zu einem Dokument oder einer ganzen Sammlung (inkl.
+  Untersammlungen) für Leute ohne Zugang – wahlweise mit Passwort, Ablaufdatum
+  und (bei Sammlungen) Upload-Möglichkeit, z. B. für den Steuerberater. Links
+  lassen sich jederzeit widerrufen; Büro zählt die Aufrufe.
+- **Bearbeiten mit Euro-Office** (OnlyOffice-kompatibel): Word-, Excel- und
+  PowerPoint-Dateien sowie OpenDocument direkt im Browser bearbeiten. Beim
+  Schließen (oder mit „Speichern“) legt Büro eine neue Version an.
 - Vorschau (PDF, Bilder, Text), Vorschaubilder in der Liste, Dokumentdatum,
   Notizen, Hell/Dunkel-Modus, Tastenkürzel (`/` = Suche, `Esc` = schließen).
 
@@ -119,13 +126,33 @@ Minuten und ca. 2–4 GB RAM).
 | `BUERO_MAX_UPLOAD_MB` | `1024` | Maximale Dateigröße |
 | `BUERO_WORKERS` | CPU-Kerne (max. 8) | Parallele Verarbeitung (Text/OCR) |
 | `BUERO_SESSION_DAYS` | `90` | Gültigkeit einer Anmeldung |
+| `BUERO_PUBLIC_URL` | aus Anfrage | Öffentliche Adresse, z. B. `https://buero.example.com` – für Euro-Office empfohlen |
+| `BUERO_OFFICE_URL` | – | Adresse des Euro-Office/OnlyOffice Document Servers, z. B. `https://eurooffice.example.com` |
+| `BUERO_OFFICE_JWT_SECRET` | – | JWT-Schlüssel des Document Servers (dort `JWT_SECRET`) |
+
+### Euro-Office anbinden
+
+1. In der CapRover-App von Euro-Office den Wert der Umgebungsvariable
+   `JWT_SECRET` nachsehen (ist er nicht gesetzt, dort einen langen Zufallswert
+   eintragen und neu starten).
+2. In der Büro-App setzen:
+   `BUERO_OFFICE_URL=https://eurooffice.example.com`,
+   `BUERO_OFFICE_JWT_SECRET=<derselbe Wert>`,
+   `BUERO_PUBLIC_URL=https://buero.example.com`.
+3. Der Document Server muss Büro unter `BUERO_PUBLIC_URL` erreichen können
+   (er lädt darüber die Datei und meldet Änderungen zurück).
+
+Im Detailbereich erscheint dann „Bearbeiten“. Gespeichert wird beim Schließen
+des Editors (nach wenigen Sekunden) oder sofort mit dem Speichern-Knopf in
+Euro-Office – jeweils als neue Version.
 
 ### Datensicherung
 
 Alles liegt in `/data`:
 `buero.db` (SQLite: Metadaten, erkannter Text), `files/` (Originaldateien, nach
 SHA-256 abgelegt), `thumbs/` und `index/` (beide jederzeit neu erzeugbar). Für
-ein Backup genügt es, `buero.db*` und `files/` zu sichern. Fehlt der Suchindex,
+ein Backup genügt es, `buero.db*`, `files/` und `secret.key` (Schlüssel für
+signierte Links) zu sichern. Fehlt der Suchindex,
 wird er beim Start automatisch neu aufgebaut.
 
 ## Desktop-Client
@@ -189,7 +216,14 @@ Alle Endpunkte (außer Anmeldung/Status) erwarten `Authorization: Bearer <token>
 | `GET/POST` | `/api/collections` · `PATCH/DELETE /api/collections/{id}` | Sammlungen (mit `parent_id`) |
 | `GET/POST` | `/api/tags` · `PATCH/DELETE /api/tags/{id}` | Tags |
 | `GET` | `/api/stats` | Anzahl, Größe, offene Verarbeitung |
+| `GET/POST` | `/api/shares[?document_id=&collection_id=]` · `DELETE /api/shares/{id}` | Freigabelinks |
+| `GET` | `/api/features` · `/api/office/config/{id}` | Aktive Zusatzfunktionen · Euro-Office-Editor-Konfiguration |
 | `POST` | `/api/admin/reindex` · `/api/admin/reprocess-failed` | Wartung |
+
+Ohne Anmeldung erreichbar (über Token, Passwort-Schlüssel bzw. signierte
+Links geschützt): `/api/public/shares/{token}…` für Freigabelinks (Seite
+`/s/{token}`) sowie `/api/office/file/{id}` und `/api/office/callback/{id}` für
+den Document Server.
 
 Beispiel – Scan direkt aus einem Skript hochladen:
 

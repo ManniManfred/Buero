@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use shared::{Collection, DocumentSummary, ListResponse, Stats, Tag};
+use shared::{Collection, DocumentSummary, Features, ListResponse, Stats, Tag};
 
 use crate::api::Api;
 
@@ -17,6 +17,14 @@ pub struct UploadItem {
     pub status: String,
     pub message: String,
     pub doc_id: Option<i64>,
+}
+
+/// Ziel des Freigabe-Dialogs. Ohne Dokument und Sammlung: alle Freigaben verwalten.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ShareTarget {
+    pub document_id: Option<i64>,
+    pub collection_id: Option<i64>,
+    pub name: String,
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +55,12 @@ pub struct Ctx {
     pub show_settings: RwSignal<bool>,
     /// Zähler, der ein Neuladen der Liste auslöst
     pub refresh: RwSignal<u32>,
+    /// Zähler, der ein Neuladen der Detailansicht auslöst
+    pub detail_refresh: RwSignal<u32>,
+    pub features: RwSignal<Features>,
+    pub share_target: RwSignal<Option<ShareTarget>>,
+    /// Dokument, das gerade in Euro-Office geöffnet ist
+    pub office_doc: RwSignal<Option<i64>>,
 }
 
 pub const PAGE: usize = 50;
@@ -76,6 +90,10 @@ impl Ctx {
             toast: RwSignal::new(None),
             show_settings: RwSignal::new(false),
             refresh: RwSignal::new(0),
+            detail_refresh: RwSignal::new(0),
+            features: RwSignal::new(Features::default()),
+            share_target: RwSignal::new(None),
+            office_doc: RwSignal::new(None),
         }
     }
 
@@ -108,6 +126,11 @@ impl Ctx {
             }
             if let Ok(v) = c.api.get::<Stats>("/api/stats").await {
                 c.stats.set(v);
+            }
+            if let Ok(v) = c.api.get::<Features>("/api/features").await {
+                if v != c.features.get_untracked() {
+                    c.features.set(v);
+                }
             }
         });
     }
@@ -195,6 +218,13 @@ pub fn collection_path(cs: &[Collection], id: i64) -> String {
     }
     parts.reverse();
     parts.join(" / ")
+}
+
+/// Öffentlicher Link einer Freigabe
+pub fn share_url(c: &Ctx, token: &str) -> String {
+    let base = c.api.base.get_untracked();
+    let base = if base.is_empty() { window().location().origin().unwrap_or_default() } else { base };
+    format!("{base}/s/{token}")
 }
 
 pub fn ctx() -> Ctx {

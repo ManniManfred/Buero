@@ -215,3 +215,119 @@ pub struct Stats {
 pub struct ApiError {
     pub error: String,
 }
+
+// ---------------------------------------------------------------------------
+// Freigaben
+// ---------------------------------------------------------------------------
+
+/// Freigabelink (Ansicht für den Besitzer)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Share {
+    pub id: i64,
+    pub token: String,
+    pub document_id: Option<i64>,
+    pub collection_id: Option<i64>,
+    /// Titel des Dokuments bzw. Name der Sammlung
+    pub target_name: String,
+    pub has_password: bool,
+    pub allow_upload: bool,
+    pub expires_at: Option<i64>,
+    pub note: String,
+    pub created_at: i64,
+    pub access_count: i64,
+    pub last_access_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShareInput {
+    pub document_id: Option<i64>,
+    pub collection_id: Option<i64>,
+    /// Leer / None = ohne Passwort
+    pub password: Option<String>,
+    /// Unix-Zeit; None = unbegrenzt
+    pub expires_at: Option<i64>,
+    /// Nur bei Sammlungen: Empfänger dürfen Dateien hochladen
+    #[serde(default)]
+    pub allow_upload: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+/// Was ein Empfänger über den Link sieht
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PublicShare {
+    pub title: String,
+    pub is_collection: bool,
+    pub allow_upload: bool,
+    pub expires_at: Option<i64>,
+    pub documents: Vec<PublicDocument>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PublicDocument {
+    pub id: i64,
+    pub title: String,
+    pub original_filename: String,
+    pub kind: String,
+    pub mime: String,
+    pub size: i64,
+    pub document_date: Option<String>,
+    pub updated_at: i64,
+    pub has_thumbnail: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareUnlock {
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareKey {
+    pub key: String,
+}
+
+// ---------------------------------------------------------------------------
+// Euro-Office
+// ---------------------------------------------------------------------------
+
+/// Vom Server aktivierte Zusatzfunktionen
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Features {
+    /// Euro-Office (OnlyOffice-kompatibler Document Server) ist angebunden
+    pub office: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfficeConfig {
+    /// Adresse von `api.js` des Document Servers
+    pub script_url: String,
+    /// Editor-Konfiguration als JSON (inkl. signiertem `token`)
+    pub config: String,
+    pub can_edit: bool,
+}
+
+/// Dateiendungen, die Euro-Office öffnen kann, mit Dokumenttyp
+pub fn office_document_type(extension: &str) -> Option<&'static str> {
+    Some(match extension.to_ascii_lowercase().as_str() {
+        "doc" | "docx" | "docm" | "dot" | "dotx" | "odt" | "ott" | "rtf" | "txt" => "word",
+        "xls" | "xlsx" | "xlsm" | "ods" | "ots" | "csv" => "cell",
+        "ppt" | "pptx" | "ppsx" | "pps" | "odp" | "otp" => "slide",
+        _ => return None,
+    })
+}
+
+/// Dateiendungen, die Euro-Office bearbeiten und im selben Format speichern kann
+pub fn office_editable(extension: &str) -> bool {
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "docx" | "docm" | "dotx" | "odt" | "ott" | "rtf" | "txt" | "xlsx" | "xlsm" | "ods" | "ots" | "csv"
+            | "pptx" | "ppsx" | "odp" | "otp"
+    )
+}
+
+pub fn extension_of(name: &str) -> &str {
+    match name.rfind('.') {
+        Some(i) if i + 1 < name.len() => &name[i + 1..],
+        _ => "",
+    }
+}

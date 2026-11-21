@@ -2,8 +2,11 @@
 // Copyright (C) 2026 Manfred Roßkamp
 
 pub mod detail;
+pub mod office;
+pub mod public;
 pub mod results;
 pub mod settings;
+pub mod share;
 pub mod sidebar;
 pub mod toolbar;
 pub mod upload;

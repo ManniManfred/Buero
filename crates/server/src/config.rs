@@ -14,6 +14,13 @@ pub struct Config {
     pub max_upload_bytes: usize,
     pub workers: usize,
     pub session_days: i64,
+    /// Öffentliche Adresse von Büro (z. B. `https://buero.example.com`), wird für
+    /// Freigabelinks und Euro-Office gebraucht. Ohne Angabe aus den Anfrage-Headern.
+    pub public_url: Option<String>,
+    /// Adresse des Euro-Office/OnlyOffice Document Servers
+    pub office_url: Option<String>,
+    /// JWT-Schlüssel des Document Servers (`JWT_SECRET`)
+    pub office_jwt_secret: Option<String>,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -43,6 +50,9 @@ impl Config {
             session_days: env("BUERO_SESSION_DAYS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(90),
+            public_url: env("BUERO_PUBLIC_URL").map(|u| u.trim_end_matches('/').to_string()),
+            office_url: env("BUERO_OFFICE_URL").map(|u| u.trim_end_matches('/').to_string()),
+            office_jwt_secret: env("BUERO_OFFICE_JWT_SECRET"),
         }
     }
 }

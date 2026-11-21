@@ -17,7 +17,9 @@ use crate::state::AppState;
 
 mod auth;
 mod collections;
-mod documents;
+pub(crate) mod documents;
+mod office;
+mod shares;
 mod tags;
 
 pub fn router(state: AppState) -> Router {
@@ -40,6 +42,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/tags", get(tags::list).post(tags::create))
         .route("/api/tags/{id}", axum::routing::patch(tags::update).delete(tags::delete))
+        .route("/api/shares", get(shares::list).post(shares::create))
+        .route("/api/shares/{id}", axum::routing::delete(shares::delete))
+        .route("/api/features", get(office::features))
+        .route("/api/office/config/{id}", get(office::config))
         .route("/api/stats", get(stats))
         .route("/api/admin/reindex", post(reindex))
         .route("/api/admin/reprocess-failed", post(reprocess_failed))
@@ -49,7 +55,16 @@ pub fn router(state: AppState) -> Router {
     let public = Router::new()
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/auth/status", get(auth::status))
-        .route("/api/auth/login", post(auth::login));
+        .route("/api/auth/login", post(auth::login))
+        // Freigabelinks (Zugriff ohne Anmeldung, geprüft über Token/Passwort)
+        .route("/api/public/shares/{token}", get(shares::public_get))
+        .route("/api/public/shares/{token}/unlock", post(shares::public_unlock))
+        .route("/api/public/shares/{token}/upload", post(shares::public_upload))
+        .route("/api/public/shares/{token}/documents/{doc}/file", get(shares::public_file))
+        .route("/api/public/shares/{token}/documents/{doc}/thumbnail", get(shares::public_thumbnail))
+        // Euro-Office Document Server (geprüft über signierte Links / JWT)
+        .route("/api/office/file/{id}", get(office::file))
+        .route("/api/office/callback/{id}", post(office::callback));
 
     let web = &state.config.web_dir;
     let spa = ServeDir::new(web)

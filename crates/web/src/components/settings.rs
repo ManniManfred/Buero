@@ -29,6 +29,13 @@ pub fn Settings() -> impl IntoView {
                     }>"Speichern & neu verbinden"</button>
                     <hr />
                 </Show>
+                <h3>"Freigaben"</h3>
+                <p class="muted small">"Links zu Dokumenten und Sammlungen, die ohne Anmeldung erreichbar sind."</p>
+                <button on:click=move |_| {
+                    c.show_settings.set(false);
+                    c.share_target.set(Some(crate::state::ShareTarget::default()));
+                }><crate::icons::Icon name="link" />"Alle Freigaben verwalten"</button>
+                <hr />
                 <h3>"Wartung"</h3>
                 <p class="muted small">"Suchindex aus der Datenbank neu aufbauen (z. B. nach einem Update)."</p>
                 <button on:click=move |_| {

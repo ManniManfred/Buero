@@ -21,6 +21,9 @@ pub struct Inner {
     pub storage: Storage,
     pub search: SearchIndex,
     pub jobs: mpsc::UnboundedSender<i64>,
+    /// Server-Schlüssel für signierte Links (`secret.key` im Datenverzeichnis)
+    pub secret: Vec<u8>,
+    pub http: reqwest::Client,
 }
 
 impl std::ops::Deref for AppState {
@@ -31,6 +34,18 @@ impl std::ops::Deref for AppState {
 }
 
 impl AppState {
+    /// Öffentliche Basis-Adresse von Büro: `BUERO_PUBLIC_URL` oder aus den
+    /// (Proxy-)Headern der Anfrage.
+    pub fn public_base(&self, headers: &axum::http::HeaderMap) -> String {
+        if let Some(u) = &self.config.public_url {
+            return u.clone();
+        }
+        let h = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).map(|v| v.split(',').next().unwrap_or("").trim().to_string());
+        let host = h("x-forwarded-host").or_else(|| h("host")).unwrap_or_else(|| "localhost".into());
+        let proto = h("x-forwarded-proto").unwrap_or_else(|| "http".into());
+        format!("{proto}://{host}")
+    }
+
     /// Indexeinträge der Dokumente neu schreiben und sofort sichtbar machen.
     pub async fn reindex(&self, ids: &[i64]) -> anyhow::Result<()> {
         if ids.is_empty() {

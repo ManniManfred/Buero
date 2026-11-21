@@ -6,6 +6,7 @@
 mod api;
 mod components;
 mod icons;
+mod js;
 mod state;
 mod util;
 
@@ -18,6 +19,12 @@ use state::{ctx, Ctx};
 
 fn main() {
     console_error_panic_hook::set_once();
+    // Freigabelinks: /s/<token> zeigt die öffentliche Seite ohne Anmeldung
+    let path = window().location().pathname().unwrap_or_default();
+    if let Some(token) = path.strip_prefix("/s/").map(|t| t.trim_end_matches('/').to_string()).filter(|t| !t.is_empty()) {
+        leptos::mount::mount_to_body(move || view! { <components::public::PublicPage token=token.clone() /> });
+        return;
+    }
     leptos::mount::mount_to_body(App);
 }
 
@@ -243,5 +250,10 @@ fn Main() -> impl IntoView {
         <Show when=move || c.show_settings.get()>
             <components::settings::Settings />
         </Show>
+        {move || c.share_target.get().map(|t| view! { <components::share::ShareDialog target=t /> })}
+        {move || c.office_doc.get().map(|id| {
+            let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone())).unwrap_or_default();
+            view! { <components::office::OfficeEditor id=id title=title /> }
+        })}
     }
 }

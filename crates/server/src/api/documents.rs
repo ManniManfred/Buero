@@ -83,7 +83,7 @@ pub async fn get(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<J
     }))
 }
 
-fn guess_mime(filename: &str, declared: Option<&str>) -> String {
+pub(crate) fn guess_mime(filename: &str, declared: Option<&str>) -> String {
     match mime_guess::from_path(filename).first() {
         Some(m) => m.essence_str().to_string(),
         None => declared
@@ -93,21 +93,29 @@ fn guess_mime(filename: &str, declared: Option<&str>) -> String {
     }
 }
 
-struct Upload {
-    staged: StagedFile,
-    filename: String,
-    mime: String,
+pub(crate) struct Upload {
+    pub staged: StagedFile,
+    pub filename: String,
+    pub mime: String,
 }
 
-/// Multipart-Upload: beliebig viele Felder `file`, optional `collection_ids`,
-/// `tag_ids` (kommagetrennt), `title` und `document_date`.
-pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<Json<Vec<UploadResult>>> {
-    let mut uploads: Vec<Upload> = Vec::new();
-    let mut collections = Vec::new();
-    let mut tags = Vec::new();
-    let mut title: Option<String> = None;
-    let mut date: Option<String> = None;
+#[derive(Default)]
+pub(crate) struct UploadForm {
+    pub uploads: Vec<Upload>,
+    pub collections: Vec<i64>,
+    pub tags: Vec<i64>,
+    pub title: Option<String>,
+    pub date: Option<String>,
+    /// Bereits vorhandene Dokumente (gleicher Inhalt) trotzdem den Sammlungen
+    /// und Tags zuordnen. Für Uploads über Freigabelinks abgeschaltet, damit
+    /// Fremde keine bestehenden Dokumente in die freigegebene Sammlung holen.
+    pub link_duplicates: bool,
+}
 
+/// Multipart-Formular lesen: beliebig viele Felder `file`, optional
+/// `collection_ids`, `tag_ids` (kommagetrennt), `title` und `document_date`.
+pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart) -> AppResult<UploadForm> {
+    let mut f = UploadForm { link_duplicates: true, ..Default::default() };
     let res: AppResult<()> = async {
         while let Some(field) = mp.next_field().await? {
             let name = field.name().unwrap_or("").to_string();
@@ -123,13 +131,13 @@ pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<
                         .stage(Box::pin(field), st.config.max_upload_bytes)
                         .await
                         .map_err(|e| AppError::bad_request(format!("{filename}: {e}")))?;
-                    uploads.push(Upload { staged, filename, mime });
+                    f.uploads.push(Upload { staged, filename, mime });
                 }
-                "collection_ids" => collections = parse_ids(&field.text().await?),
-                "tag_ids" => tags = parse_ids(&field.text().await?),
-                "title" => title = Some(field.text().await?).filter(|t| !t.trim().is_empty()),
+                "collection_ids" => f.collections = parse_ids(&field.text().await?),
+                "tag_ids" => f.tags = parse_ids(&field.text().await?),
+                "title" => f.title = Some(field.text().await?).filter(|t| !t.trim().is_empty()),
                 "document_date" => {
-                    date = Some(field.text().await?).filter(|d| util::valid_date(d))
+                    f.date = Some(field.text().await?).filter(|d| util::valid_date(d))
                 }
                 _ => {}
             }
@@ -138,15 +146,25 @@ pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<
     }
     .await;
     if let Err(e) = res {
-        for u in &uploads {
+        for u in &f.uploads {
             st.storage.discard(&u.staged).await;
         }
         return Err(e);
     }
-    if uploads.is_empty() {
+    if f.uploads.is_empty() {
         return Err(AppError::bad_request("Keine Datei übermittelt"));
     }
+    Ok(f)
+}
 
+pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<Json<Vec<UploadResult>>> {
+    let form = read_upload_form(&st, &mut mp).await?;
+    Ok(Json(store_uploads(&st, form).await?))
+}
+
+/// Gestagte Dateien als Dokumente anlegen (Duplikate werden erkannt).
+pub(crate) async fn store_uploads(st: &AppState, form: UploadForm) -> AppResult<Vec<UploadResult>> {
+    let UploadForm { uploads, collections, tags, title, date, link_duplicates } = form;
     let single = uploads.len() == 1;
     let mut results = Vec::with_capacity(uploads.len());
     let mut touched = Vec::new();
@@ -197,6 +215,10 @@ pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<
             tx.commit().await?;
             (id, false)
         };
+        if duplicate && !link_duplicates {
+            results.push((id, duplicate));
+            continue;
+        }
         // Zuordnungen auch bei Duplikaten ergänzen
         for c in &collections {
             sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT ?, id FROM collections WHERE id = ?")
@@ -214,21 +236,20 @@ pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<
     }
     st.reindex(&touched).await?;
 
-    let summaries = db::summaries(&st.pool, &touched).await?;
-    Ok(Json(
-        results
-            .into_iter()
-            .filter_map(|(id, duplicate)| {
-                summaries
-                    .iter()
-                    .find(|s| s.id == id)
-                    .map(|s| UploadResult { document: s.clone(), duplicate })
-            })
-            .collect(),
-    ))
+    let all: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+    let summaries = db::summaries(&st.pool, &all).await?;
+    Ok(results
+        .into_iter()
+        .filter_map(|(id, duplicate)| {
+            summaries
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| UploadResult { document: s.clone(), duplicate })
+        })
+        .collect())
 }
 
-fn sanitize_filename(name: &str) -> String {
+pub(crate) fn sanitize_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let cleaned: String = base.chars().filter(|c| !c.is_control()).collect();
     let cleaned = cleaned.trim();
@@ -256,9 +277,20 @@ pub async fn new_version(
         }
     }
     let u = upload.ok_or_else(|| AppError::bad_request("Keine Datei übermittelt"))?;
+    if add_version(&st, &doc, u).await? {
+        // Eine evtl. offene Euro-Office-Sitzung bezieht sich auf die alte Fassung
+        sqlx::query("UPDATE documents SET office_key = NULL WHERE id = ?").bind(id).execute(&st.pool).await?;
+    }
+    db::summary(&st.pool, id).await?.map(Json).ok_or_else(AppError::not_found)
+}
+
+/// Gestagte Datei als neue Version eines Dokuments speichern. Gleicher Inhalt
+/// wie die aktuelle Version wird verworfen (Rückgabe `false`).
+pub(crate) async fn add_version(st: &AppState, doc: &db::DocRow, u: Upload) -> AppResult<bool> {
+    let id = doc.id;
     if u.staged.sha256 == doc.sha256 {
         st.storage.discard(&u.staged).await;
-        return db::summary(&st.pool, id).await?.map(Json).ok_or_else(AppError::not_found);
+        return Ok(false);
     }
     st.storage.commit(&u.staged).await?;
     let ts = now();
@@ -293,7 +325,7 @@ pub async fn new_version(
     tx.commit().await?;
     let _ = tokio::fs::remove_file(st.storage.thumb_path(id)).await;
     let _ = st.jobs.send(id);
-    db::summary(&st.pool, id).await?.map(Json).ok_or_else(AppError::not_found)
+    Ok(true)
 }
 
 pub async fn update(
@@ -436,12 +468,23 @@ pub async fn file(
     req: Request,
 ) -> AppResult<Response> {
     let doc = db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
-    let (sha, filename) = match p.version {
+    serve_document(&st, &doc, p.version, p.download, req).await
+}
+
+/// Liefert eine Dokumentdatei (optional eine ältere Version) aus.
+pub(crate) async fn serve_document(
+    st: &AppState,
+    doc: &db::DocRow,
+    version: Option<i64>,
+    download: bool,
+    req: Request,
+) -> AppResult<Response> {
+    let (sha, filename) = match version {
         Some(v) if v != doc.version => {
             let row: Option<(String, String)> = sqlx::query_as(
                 "SELECT sha256, original_filename FROM document_versions WHERE document_id = ? AND version = ?",
             )
-            .bind(id)
+            .bind(doc.id)
             .bind(v)
             .fetch_optional(&st.pool)
             .await?;
@@ -452,7 +495,7 @@ pub async fn file(
     let mime = guess_mime(&filename, Some(&doc.mime));
     let mut res = serve(st.storage.file_path(&sha), &mime, req).await?;
     res.headers_mut()
-        .insert(header::CONTENT_DISPOSITION, content_disposition(!p.download, &filename));
+        .insert(header::CONTENT_DISPOSITION, content_disposition(!download, &filename));
     res.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
     res.headers_mut()
@@ -483,7 +526,7 @@ pub async fn thumbnail(
     Ok(res)
 }
 
-async fn serve(path: std::path::PathBuf, mime: &str, req: Request) -> AppResult<Response> {
+pub(crate) async fn serve(path: std::path::PathBuf, mime: &str, req: Request) -> AppResult<Response> {
     let mime = mime.parse().unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM);
     let res = match ServeFile::new_with_mime(path, &mime).oneshot(req).await {
         Ok(r) => r,

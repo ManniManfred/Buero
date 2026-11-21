@@ -196,6 +196,13 @@ fn tree_level(c: Ctx, collapsed: RwSignal<HashSet<i64>>, parent: Option<i64>, de
                         <span class="grow ellipsis">{name.clone()}</span>
                         <span class="count">{col.document_count}</span>
                         <span class="row-actions">
+                            <button class="icon" title="Sammlung freigeben" on:click={
+                                let name = name.clone();
+                                move |ev| {
+                                    ev.stop_propagation();
+                                    c.share_target.set(Some(crate::state::ShareTarget { document_id: None, collection_id: Some(id), name: name.clone() }));
+                                }
+                            }><Icon name="link" class="sm" /></button>
                             <button class="icon" title="Untersammlung anlegen"
                                 on:click=move |ev| { ev.stop_propagation(); create_collection(c, Some(id)); }><Icon name="plus" class="sm" /></button>
                             <button class="icon" title="Bearbeiten" on:click={

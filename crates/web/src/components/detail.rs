@@ -7,7 +7,7 @@ use shared::{Collection, DocumentDetail, DocumentSummary, DocumentUpdate, Tag, T
 
 use crate::api::open_external;
 use crate::icons::Icon;
-use crate::state::{collection_path, ctx, Ctx};
+use crate::state::{collection_path, ctx, Ctx, ShareTarget};
 use crate::util::{format_size, format_ts, status_label};
 
 fn save(c: Ctx, id: i64, upd: DocumentUpdate, detail: RwSignal<Option<DocumentDetail>>) {
@@ -56,6 +56,13 @@ pub fn DetailPanel(id: i64) -> impl IntoView {
         });
     };
     load();
+    // Von außen angestoßenes Neuladen (z. B. nach Speichern in Euro-Office)
+    Effect::new(move |prev: Option<()>| {
+        c.detail_refresh.track();
+        if prev.is_some() {
+            load();
+        }
+    });
 
     // Solange verarbeitet wird, Detail nachladen
     let handle = set_interval_with_handle(
@@ -156,6 +163,18 @@ fn DetailBody(
     };
 
     let open_url = file_url.clone();
+    let ext = shared::extension_of(&s.original_filename).to_ascii_lowercase();
+    let office_btn = move || {
+        (c.features.get().office && shared::office_document_type(&ext).is_some()).then(|| {
+            let edit = shared::office_editable(&ext);
+            view! {
+                <button class="primary" title="In Euro-Office öffnen" on:click=move |_| c.office_doc.set(Some(id))>
+                    <Icon name="file-pen" />{if edit { "Bearbeiten" } else { "Ansehen" }}
+                </button>
+            }
+        })
+    };
+    let share_name = s.title.clone();
     let status = status_label(&s.extract_status);
 
     view! {
@@ -166,10 +185,14 @@ fn DetailBody(
             <button class="icon" title="Schließen (Esc)" on:click=move |_| c.selected.set(None)><Icon name="x" /></button>
         </div>
         <div class="actions">
+            {office_btn}
             <button on:click=move |_| open_external(&open_url)><Icon name="external" />"Öffnen"</button>
             <button on:click=move |_| open_external(&download_url)><Icon name="download" />"Herunterladen"</button>
             <button title="Bearbeitete Datei als neue Version hochladen"
                 on:click=move |_| { if let Some(i) = version_input.get() { i.click(); } }><Icon name="history" />"Neue Version"</button>
+            <button title="Link zum Teilen erstellen" on:click=move |_| c.share_target.set(Some(ShareTarget {
+                document_id: Some(id), collection_id: None, name: share_name.clone(),
+            }))><Icon name="link" />"Freigeben"</button>
             <input type="file" style="display:none" node_ref=version_input on:change=move |_| {
                 let Some(i) = version_input.get() else { return };
                 let Some(f) = i.files().and_then(|f| f.get(0)) else { return };

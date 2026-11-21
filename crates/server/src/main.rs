@@ -10,6 +10,7 @@ mod db;
 mod error;
 mod extract;
 mod search;
+mod sign;
 mod state;
 mod storage;
 mod util;
@@ -37,9 +38,19 @@ async fn main() -> anyhow::Result<()> {
     let storage = storage::Storage::new(&config.data_dir).await?;
     let (search, fresh_index) = search::SearchIndex::open(&config.data_dir.join("index"))?;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let secret = sign::load_or_create_secret(&config.data_dir).await?;
+    let http = reqwest::Client::builder()
+        .user_agent(concat!("buero/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    match (&config.office_url, &config.office_jwt_secret) {
+        (Some(u), Some(_)) => tracing::info!("Euro-Office angebunden: {u}"),
+        (Some(u), None) => tracing::warn!("Euro-Office ({u}) ohne BUERO_OFFICE_JWT_SECRET – nur sinnvoll, wenn JWT dort abgeschaltet ist"),
+        _ => {}
+    }
 
     let state = state::AppState {
-        inner: Arc::new(state::Inner { config: config.clone(), pool, storage, search, jobs: tx }),
+        inner: Arc::new(state::Inner { config: config.clone(), pool, storage, search, jobs: tx, secret, http }),
     };
 
     if fresh_index {
