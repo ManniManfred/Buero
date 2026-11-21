@@ -54,6 +54,10 @@ Standardprogramm des Systems).
 - **Bearbeiten mit Euro-Office** (OnlyOffice-kompatibel): Word-, Excel- und
   PowerPoint-Dateien sowie OpenDocument direkt im Browser bearbeiten. Beim
   Schließen (oder mit „Speichern“) legt Büro eine neue Version an.
+- **Bearbeiten mit dem Tupfer Designer**: tiptoi-Projekte (`.tupfer`) direkt im
+  Browser bearbeiten ([Tupfer](https://github.com/ManniManfred/Tupfer), liegt dem
+  Docker-Image bei). „Speichern“ im Designer legt eine neue Version an; hat
+  inzwischen jemand anderes gespeichert, fragt der Designer nach.
 - Vorschau (PDF, Bilder, Text), Vorschaubilder in der Liste, Dokumentdatum,
   Notizen, Hell/Dunkel-Modus, Tastenkürzel (`/` = Suche, `Esc` = schließen).
 
@@ -131,6 +135,7 @@ Minuten und ca. 2–4 GB RAM).
 | `BUERO_PUBLIC_URL` | aus Anfrage | Öffentliche Adresse, z. B. `https://buero.example.com` – für Euro-Office empfohlen |
 | `BUERO_OFFICE_URL` | – | Adresse des Euro-Office/OnlyOffice Document Servers, z. B. `https://eurooffice.example.com` |
 | `BUERO_OFFICE_JWT_SECRET` | – | JWT-Schlüssel des Document Servers (dort `JWT_SECRET`) |
+| `BUERO_TUPFER_DIR` | `/app/tupfer` (Docker) | Web-Version des Tupfer Designers, wird unter `/tupfer/` ausgeliefert. Fehlt sie, gibt es kein „Bearbeiten“ für `.tupfer` |
 
 ### Euro-Office anbinden
 
@@ -147,6 +152,22 @@ Minuten und ca. 2–4 GB RAM).
 Im Detailbereich erscheint dann „Bearbeiten“. Gespeichert wird beim Schließen
 des Editors (nach wenigen Sekunden) oder sofort mit dem Speichern-Knopf in
 Euro-Office – jeweils als neue Version.
+
+### Tupfer Designer
+
+Das Docker-Image holt beim Bauen die Web-Version des
+[Tupfer Designers](https://github.com/ManniManfred/Tupfer) aus dessen neuestem
+Release und liefert sie unter `/tupfer/` aus. Bei `.tupfer`-Dokumenten erscheint
+dann im Detailbereich „Bearbeiten“. Der Designer lädt und speichert selbst über
+die API von Büro (auch im Desktop-Client). Eine feste Version lässt sich beim
+Bauen wählen:
+
+```bash
+docker build --build-arg TUPFER_URL=https://github.com/ManniManfred/Tupfer/releases/download/v1.37.0/Tupfer-Designer-Nextcloud.tar.gz .
+```
+
+Ohne Docker: die Web-Version (`dotnet publish Tupfer.Designer.Browser`, Ordner
+`wwwroot`) nach `./tupfer` legen oder `BUERO_TUPFER_DIR` setzen.
 
 ### Datensicherung
 

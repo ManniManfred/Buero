@@ -256,12 +256,28 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
     if cleaned.is_empty() { "upload".into() } else { cleaned.chars().take(255).collect() }
 }
 
+#[derive(Deserialize)]
+pub struct VersionParams {
+    /// Version, auf der die hochgeladene Datei beruht: Gibt es inzwischen eine
+    /// neuere, wird abgelehnt (409), statt fremde Änderungen zu überdecken.
+    basis: Option<i64>,
+}
+
 pub async fn new_version(
     State(st): State<AppState>,
     Path(id): Path<i64>,
+    Query(p): Query<VersionParams>,
     mut mp: Multipart,
 ) -> AppResult<Json<DocumentSummary>> {
     let doc = db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    if let Some(basis) = p.basis {
+        if basis != doc.version {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                format!("Inzwischen gibt es eine neuere Version ({}, bearbeitet wurde {basis})", doc.version),
+            ));
+        }
+    }
     let mut upload = None;
     while let Some(field) = mp.next_field().await? {
         if field.name() == Some("file") {

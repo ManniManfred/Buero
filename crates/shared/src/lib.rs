@@ -295,6 +295,9 @@ pub struct ShareKey {
 pub struct Features {
     /// Euro-Office (OnlyOffice-kompatibler Document Server) ist angebunden
     pub office: bool,
+    /// Der Tupfer Designer liegt bei (Bearbeiten von `.tupfer`-Projekten unter `/tupfer/`)
+    #[serde(default)]
+    pub tupfer: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

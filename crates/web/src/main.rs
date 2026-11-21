@@ -255,5 +255,9 @@ fn Main() -> impl IntoView {
             let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone())).unwrap_or_default();
             view! { <components::office::OfficeEditor id=id title=title /> }
         })}
+        {move || c.tupfer_doc.get().map(|id| {
+            let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone())).unwrap_or_default();
+            view! { <components::tupfer::TupferEditor id=id title=title /> }
+        })}
     }
 }

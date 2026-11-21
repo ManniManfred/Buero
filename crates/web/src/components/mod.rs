@@ -9,4 +9,5 @@ pub mod settings;
 pub mod share;
 pub mod sidebar;
 pub mod toolbar;
+pub mod tupfer;
 pub mod upload;

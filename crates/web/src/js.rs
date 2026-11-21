@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Manfred Roßkamp
 
-//! Kleine JavaScript-Helfer: Zwischenablage und Euro-Office-Editor.
+//! Kleine JavaScript-Helfer: Zwischenablage, Euro-Office-Editor und Tupfer Designer.
 
 use wasm_bindgen::prelude::*;
 
@@ -44,6 +44,35 @@ export function office_open(scriptUrl, elementId, configJson, onEvent) {
   document.head.appendChild(s);
 }
 
+let tupferListener = null;
+
+// Meldungen des Tupfer Designers im iframe (gespeichert, Status der Änderungen)
+export function tupfer_listen(frameId, onEvent) {
+  tupfer_unlisten();
+  tupferListener = (e) => {
+    const f = document.getElementById(frameId);
+    const d = e.data || {};
+    if (!f || e.source !== f.contentWindow || d.quelle !== "tupfer") return;
+    onEvent(String(d.art || ""), String(d.text || ""), d.geaendert === true);
+  };
+  window.addEventListener("message", tupferListener);
+}
+
+export function tupfer_unlisten() {
+  if (tupferListener) {
+    window.removeEventListener("message", tupferListener);
+    tupferListener = null;
+  }
+}
+
+// Fragt den Designer, ob es ungespeicherte Änderungen gibt (Antwort über tupfer_listen, art "status")
+export function tupfer_ask(frameId) {
+  const f = document.getElementById(frameId);
+  if (!f || !f.contentWindow) return false;
+  f.contentWindow.postMessage({ quelle: "buero", art: "geaendert?" }, "*");
+  return true;
+}
+
 export function office_close() {
   if (editor) {
     try { editor.destroyEditor(); } catch (e) {}
@@ -55,6 +84,9 @@ extern "C" {
     fn copy_text(t: &str) -> js_sys::Promise;
     pub fn office_open(script_url: &str, element_id: &str, config_json: &str, on_event: &js_sys::Function);
     pub fn office_close();
+    pub fn tupfer_listen(frame_id: &str, on_event: &js_sys::Function);
+    pub fn tupfer_unlisten();
+    pub fn tupfer_ask(frame_id: &str) -> bool;
 }
 
 /// Text in die Zwischenablage kopieren; `true` bei Erfolg.

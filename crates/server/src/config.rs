@@ -21,6 +21,8 @@ pub struct Config {
     pub office_url: Option<String>,
     /// JWT-Schlüssel des Document Servers (`JWT_SECRET`)
     pub office_jwt_secret: Option<String>,
+    /// Web-Version des Tupfer Designers (Bearbeiten von `.tupfer`-Projekten), wird unter `/tupfer/` ausgeliefert
+    pub tupfer_dir: PathBuf,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -53,6 +55,7 @@ impl Config {
             public_url: env("BUERO_PUBLIC_URL").map(|u| u.trim_end_matches('/').to_string()),
             office_url: env("BUERO_OFFICE_URL").map(|u| u.trim_end_matches('/').to_string()),
             office_jwt_secret: env("BUERO_OFFICE_JWT_SECRET"),
+            tupfer_dir: env("BUERO_TUPFER_DIR").unwrap_or_else(|| "./tupfer".into()).into(),
         }
     }
 }

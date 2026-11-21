@@ -75,9 +75,13 @@ pub fn router(state: AppState) -> Router {
         .precompressed_gzip()
         .fallback(ServeFile::new(web.join("index.html")));
 
+    // Tupfer Designer (WebAssembly) zum Bearbeiten von .tupfer-Projekten; spricht selbst die API an
+    let tupfer = ServeDir::new(&state.config.tupfer_dir).precompressed_br().precompressed_gzip();
+
     Router::new()
         .merge(public)
         .merge(protected)
+        .nest_service("/tupfer", tupfer)
         .fallback_service(spa)
         .layer(DefaultBodyLimit::max(state.config.max_upload_bytes + 1024 * 1024))
         .layer(CompressionLayer::new())

@@ -46,6 +46,18 @@ RUN cargo fetch \
  && cd /src && cargo build --release -p buero-server
 
 # ---------------------------------------------------------------------------
+# Tupfer Designer (Web-Version) zum Bearbeiten von .tupfer-Projekten: aus dem
+# Release-Paket für Nextcloud (enthält die Web-Version im Ordner editor/).
+# Feste Version z. B. mit
+#   --build-arg TUPFER_URL=https://github.com/ManniManfred/Tupfer/releases/download/v1.37.0/Tupfer-Designer-Nextcloud.tar.gz
+FROM ${RUNTIME_IMAGE} AS tupfer
+ARG TUPFER_URL=https://github.com/ManniManfred/Tupfer/releases/latest/download/Tupfer-Designer-Nextcloud.tar.gz
+ADD ${TUPFER_URL} /tmp/tupfer.tar.gz
+RUN tar -xzf /tmp/tupfer.tar.gz -C /tmp \
+ && test -f /tmp/tupfer/editor/index.html \
+ && mv /tmp/tupfer/editor /tupfer
+
+# ---------------------------------------------------------------------------
 FROM ${RUNTIME_IMAGE}
 
 LABEL org.opencontainers.image.title="Büro" \
@@ -61,9 +73,11 @@ RUN apt-get update \
 
 COPY --from=builder /src/target/release/buero-server /usr/local/bin/buero-server
 COPY --from=builder /src/crates/web/dist /app/web
+COPY --from=tupfer /tupfer /app/tupfer
 
 ENV BUERO_DATA_DIR=/data \
     BUERO_WEB_DIR=/app/web \
+    BUERO_TUPFER_DIR=/app/tupfer \
     PORT=80 \
     RUST_LOG=info
 

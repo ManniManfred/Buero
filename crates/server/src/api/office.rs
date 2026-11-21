@@ -32,7 +32,10 @@ use crate::util::now;
 const FILE_LINK_SECS: i64 = 24 * 3600;
 
 pub async fn features(State(st): State<AppState>) -> Json<Features> {
-    Json(Features { office: st.config.office_url.is_some() })
+    Json(Features {
+        office: st.config.office_url.is_some(),
+        tupfer: st.config.tupfer_dir.join("index.html").is_file(),
+    })
 }
 
 pub async fn config(

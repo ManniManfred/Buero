@@ -4,3 +4,4 @@ crates/web/dist
 crates/desktop/gen
 **/*.rs.bk
 .DS_Store
+/tupfer

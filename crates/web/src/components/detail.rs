@@ -164,6 +164,7 @@ fn DetailBody(
 
     let open_url = file_url.clone();
     let ext = shared::extension_of(&s.original_filename).to_ascii_lowercase();
+    let tupfer_ext = ext.clone();
     let office_btn = move || {
         (c.features.get().office && shared::office_document_type(&ext).is_some()).then(|| {
             let edit = shared::office_editable(&ext);
@@ -172,6 +173,13 @@ fn DetailBody(
                     <Icon name="file-pen" />{if edit { "Bearbeiten" } else { "Ansehen" }}
                 </button>
             }
+        })
+    };
+    let tupfer_btn = move || {
+        (c.features.get().tupfer && tupfer_ext == "tupfer").then(|| view! {
+            <button class="primary" title="Im Tupfer Designer bearbeiten" on:click=move |_| c.tupfer_doc.set(Some(id))>
+                <Icon name="file-pen" />"Bearbeiten"
+            </button>
         })
     };
     let share_name = s.title.clone();
@@ -186,6 +194,7 @@ fn DetailBody(
         </div>
         <div class="actions">
             {office_btn}
+            {tupfer_btn}
             <button on:click=move |_| open_external(&open_url)><Icon name="external" />"Öffnen"</button>
             <button on:click=move |_| open_external(&download_url)><Icon name="download" />"Herunterladen"</button>
             <button title="Bearbeitete Datei als neue Version hochladen"
