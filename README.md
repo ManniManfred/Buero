@@ -64,7 +64,7 @@ Standardprogramm des Systems).
 Gebaut und ausgerollt wird **nur bei einem Versions-Tag** (`v*`): GitHub
 Actions baut dann das Image (`ghcr.io/mannimanfred/buero:v1.2.3`, zusätzlich
 `:1.2` und `:latest`) und rollt es automatisch auf CapRover aus
-(`.github/workflows/docker.yml`). Normale Pushes auf `main` lösen nichts aus.
+(`.github/workflows/docker.yml`). Normale Pushes auf `master` lösen nichts aus.
 Der CapRover-Server muss nichts kompilieren.
 
 Neue Version veröffentlichen:
