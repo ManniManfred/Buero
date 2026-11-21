@@ -5,8 +5,9 @@ use leptos::prelude::*;
 use shared::DocumentSummary;
 
 use crate::components::sidebar::DRAG_MIME;
+use crate::icons::{Icon, KindIcon};
 use crate::state::ctx;
-use crate::util::{format_date, format_size, format_ts, kind_icon, status_label};
+use crate::util::{format_date, format_size, format_ts, status_label};
 
 #[component]
 pub fn Results() -> impl IntoView {
@@ -90,7 +91,7 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
             <div class="thumb">
                 {match thumb {
                     Some(src) => view! { <img src=src loading="lazy" alt="" /> }.into_any(),
-                    None => view! { <span class="kind-icon">{kind_icon(&kind)}</span> }.into_any(),
+                    None => view! { <KindIcon kind=kind.clone() class="kind-icon" /> }.into_any(),
                 }}
             </div>
             <div class="row-body">
@@ -109,7 +110,7 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
                 <div class="chips">
                     {collections.into_iter().map(|cid| view! {
                         <span class="chip coll" on:click=move |ev| { ev.stop_propagation(); c.unfiled.set(false); c.collection.set(Some(cid)); }>
-                            "🗂 "{move || c.collection_name(cid)}
+                            <Icon name="folder" class="sm" />{move || c.collection_name(cid)}
                         </span>
                     }).collect_view()}
                     {tags.into_iter().map(|tid| {

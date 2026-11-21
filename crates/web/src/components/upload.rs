@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use shared::UploadResult;
 
+use crate::icons::Icon;
 use crate::state::{ctx, Ctx, UploadItem};
 
 pub fn pick_files(list: Option<web_sys::FileList>) -> Vec<web_sys::File> {
@@ -83,17 +84,17 @@ pub fn UploadPanel() -> impl IntoView {
                         let (done, all) = c.uploads.with(|u| (u.iter().filter(|x| x.status != "waiting" && x.status != "uploading").count(), u.len()));
                         format!("Upload {done}/{all}")
                     }}</strong>
-                    <button class="icon" on:click=move |_| c.uploads.update(|u| u.retain(|x| x.status == "uploading" || x.status == "waiting"))>"✕"</button>
+                    <button class="icon" on:click=move |_| c.uploads.update(|u| u.retain(|x| x.status == "uploading" || x.status == "waiting"))><Icon name="x" /></button>
                 </div>
                 <ul>
                     <For each=move || c.uploads.get() key=|u| (u.key, u.status.clone()) let:u>
                         <li class=format!("up-{}", u.status) on:click=move |_| if let Some(id) = u.doc_id { c.selected.set(Some(id)) }>
                             <span class="ellipsis grow">{u.name.clone()}</span>
                             <span class="small">{match u.status.as_str() {
-                                "waiting" => "wartet".to_string(),
-                                "uploading" => "lädt …".to_string(),
-                                "done" => "✓".to_string(),
-                                _ => u.message.clone(),
+                                "waiting" => "wartet".into_any(),
+                                "uploading" => "lädt …".into_any(),
+                                "done" => view! { <Icon name="check" class="ok" /> }.into_any(),
+                                _ => u.message.clone().into_any(),
                             }}</span>
                         </li>
                     </For>

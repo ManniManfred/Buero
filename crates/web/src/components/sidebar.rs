@@ -7,6 +7,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use shared::{BulkUpdate, Collection, CollectionInput, TagInput};
 
+use crate::icons::{Icon, KindIcon};
 use crate::state::{ctx, Ctx};
 use crate::util::COLORS;
 
@@ -82,25 +83,25 @@ pub fn Sidebar() -> impl IntoView {
     view! {
         <aside class="sidebar">
             <div class="brand">
-                <span>"📁 Büro"</span>
-                <button class="icon" title="Einstellungen" on:click=move |_| c.show_settings.set(true)>"⚙"</button>
+                <span class="brand-name"><Icon name="logo" class="brand-logo" />"Büro"</span>
+                <button class="icon" title="Einstellungen" on:click=move |_| c.show_settings.set(true)><Icon name="settings" /></button>
             </div>
             <nav>
                 <div class="nav-item" class:active=move || c.collection.get().is_none() && !c.unfiled.get()
                     on:click=select_all>
-                    <span>"🗂️ Alle Dokumente"</span>
+                    <span class="label"><Icon name="layers" />"Alle Dokumente"</span>
                     <span class="count">{move || c.stats.get().documents}</span>
                 </div>
                 <div class="nav-item" class:active=move || c.unfiled.get() on:click=select_unfiled
                     title="Dokumente, die noch keiner Sammlung zugeordnet sind">
-                    <span>"📥 Eingang"</span>
+                    <span class="label"><Icon name="inbox" />"Eingang"</span>
                     <span class="count">{move || c.stats.get().unfiled}</span>
                 </div>
             </nav>
 
             <div class="section-head">
                 <span>"Sammlungen"</span>
-                <button class="icon" title="Neue Sammlung" on:click=move |_| create_collection(c, None)>"+"</button>
+                <button class="icon" title="Neue Sammlung" on:click=move |_| create_collection(c, None)><Icon name="plus" class="sm" /></button>
             </div>
             <div class="tree">
                 {move || tree_level(c, collapsed, None, 0)}
@@ -119,7 +120,7 @@ pub fn Sidebar() -> impl IntoView {
                             }
                         });
                     }
-                }>"+"</button>
+                }><Icon name="plus" class="sm" /></button>
             </div>
             <div class="tag-cloud">
                 <For each=move || c.tags.get() key=|t| (t.id, t.name.clone(), t.document_count, t.color.clone()) let:t>
@@ -138,7 +139,7 @@ pub fn Sidebar() -> impl IntoView {
                                 let cur = c.kind.get_untracked();
                                 c.kind.set(if cur == k2 { String::new() } else { k2.clone() });
                             }>
-                            <span>{crate::util::kind_icon(&k2.clone())}" "{*label}</span>
+                            <span class="label"><KindIcon kind=k2.clone() />{*label}</span>
                         </div>
                     }
                 }).collect_view()}
@@ -189,18 +190,18 @@ fn tree_level(c: Ctx, collapsed: RwSignal<HashSet<i64>>, parent: Option<i64>, de
                             ev.stop_propagation();
                             collapsed.update(|s| { if !s.remove(&id) { s.insert(id); } });
                         }>
-                            {if has_children { if is_open() { "▾" } else { "▸" } } else { "" }}
+                            {move || has_children.then(|| view! { <Icon name=if is_open() { "chevron-down" } else { "chevron-right" } class="sm" /> })}
                         </span>
                         <span class="dot" style=format!("background:{}", if color.is_empty() { "var(--muted)".to_string() } else { color.clone() })></span>
                         <span class="grow ellipsis">{name.clone()}</span>
                         <span class="count">{col.document_count}</span>
                         <span class="row-actions">
                             <button class="icon" title="Untersammlung anlegen"
-                                on:click=move |ev| { ev.stop_propagation(); create_collection(c, Some(id)); }>"+"</button>
+                                on:click=move |ev| { ev.stop_propagation(); create_collection(c, Some(id)); }><Icon name="plus" class="sm" /></button>
                             <button class="icon" title="Bearbeiten" on:click={
                                 let name = name.clone();
                                 move |ev| { ev.stop_propagation(); edit_collection(c, id, name.clone()); }
-                            }>"✎"</button>
+                            }><Icon name="pencil" class="sm" /></button>
                         </span>
                     </div>
                     {move || (has_children && is_open()).then(|| tree_level(c, collapsed, Some(id), depth + 1))}

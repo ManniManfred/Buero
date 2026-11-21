@@ -31,19 +31,6 @@ pub fn format_date(d: &str) -> String {
     if p.len() == 3 { format!("{}.{}.{}", p[2], p[1], p[0]) } else { d.to_string() }
 }
 
-pub fn kind_icon(kind: &str) -> &'static str {
-    match kind {
-        "pdf" => "📄",
-        "image" => "🖼️",
-        "word" => "📝",
-        "spreadsheet" => "📊",
-        "presentation" => "📽️",
-        "text" => "📃",
-        "email" => "✉️",
-        _ => "📁",
-    }
-}
-
 pub fn status_label(s: &str) -> &'static str {
     match s {
         "pending" => "wartet auf Verarbeitung",

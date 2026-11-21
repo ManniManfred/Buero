@@ -6,6 +6,7 @@ use leptos::task::spawn_local;
 use shared::BulkUpdate;
 
 use crate::components::upload::{pick_files, start_uploads};
+use crate::icons::{Icon, KindIcon};
 use crate::state::{ctx, Ctx};
 
 #[component]
@@ -16,7 +17,7 @@ pub fn Toolbar() -> impl IntoView {
     view! {
         <div class="toolbar">
             <div class="search">
-                <span class="search-icon">"🔍"</span>
+                <Icon name="search" class="search-icon" />
                 <input id="search" type="search" autocomplete="off" spellcheck="false"
                     placeholder="Dokumente durchsuchen …  (Taste /)"
                     prop:value=move || c.query.get()
@@ -32,7 +33,7 @@ pub fn Toolbar() -> impl IntoView {
                 <option value="date_asc">"Dokumentdatum ↑"</option>
             </select>
             <button class="primary" on:click=move |_| { if let Some(i) = file_input.get() { i.click(); } }>
-                "⬆ Hochladen"
+                <Icon name="upload" />"Hochladen"
             </button>
             <input type="file" multiple style="display:none" node_ref=file_input
                 on:change=move |_| {
@@ -65,17 +66,17 @@ fn FilterBar() -> impl IntoView {
             </span>
             {move || c.collection.get().map(|id| view! {
                 <span class="chip removable" on:click=move |_| c.collection.set(None)>
-                    "🗂 "{c.collection_name(id)}" ✕"
+                    <Icon name="folder" class="sm" />{c.collection_name(id)}<Icon name="x" class="sm" />
                 </span>
             })}
             {move || c.unfiled.get().then(|| view! {
-                <span class="chip removable" on:click=move |_| c.unfiled.set(false)>"📥 Eingang ✕"</span>
+                <span class="chip removable" on:click=move |_| c.unfiled.set(false)><Icon name="inbox" class="sm" />"Eingang"<Icon name="x" class="sm" /></span>
             })}
             {move || {
                 let k = c.kind.get();
                 (!k.is_empty()).then(|| view! {
                     <span class="chip removable" on:click=move |_| c.kind.set(String::new())>
-                        {shared::kind_label(&k)}" ✕"
+                        <KindIcon kind=k.clone() class="sm" />{shared::kind_label(&k)}<Icon name="x" class="sm" />
                     </span>
                 })
             }}
@@ -83,7 +84,7 @@ fn FilterBar() -> impl IntoView {
                 let name = c.tags.with(|ts| ts.iter().find(|t| t.id == id).map(|t| t.name.clone()).unwrap_or_default());
                 view! {
                     <span class="chip removable" on:click=move |_| c.tag_filter.update(|t| t.retain(|x| *x != id))>
-                        "#"{name}" ✕"
+                        <Icon name="tag" class="sm" />{name}<Icon name="x" class="sm" />
                     </span>
                 }
             }).collect_view()}
@@ -118,7 +119,7 @@ fn BulkBar() -> impl IntoView {
                         bulk(c, BulkUpdate { ids: ids(), add_collections: vec![coll], ..Default::default() }, "Zur Sammlung hinzugefügt");
                     }
                 }>
-                    <option value="" selected>"➕ Zu Sammlung hinzufügen …"</option>
+                    <option value="" selected>"+ Zu Sammlung hinzufügen …"</option>
                     {move || c.collections.with(|cs| {
                         let mut v: Vec<(i64, String)> = cs.iter().map(|x| (x.id, crate::state::collection_path(cs, x.id))).collect();
                         v.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));

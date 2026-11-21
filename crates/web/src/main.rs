@@ -5,6 +5,7 @@
 
 mod api;
 mod components;
+mod icons;
 mod state;
 mod util;
 
@@ -12,6 +13,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use components::{detail::DetailPanel, results::Results, sidebar::Sidebar, toolbar::Toolbar, upload::{DropOverlay, UploadPanel}};
+use icons::Icon;
 use state::{ctx, Ctx};
 
 fn main() {
@@ -99,7 +101,7 @@ fn ServerSetup(on_done: Callback<()>) -> impl IntoView {
     view! {
         <div class="center">
             <form class="card login" on:submit=submit>
-                <h1>"📁 Büro"</h1>
+                <h1 class="brand-name"><Icon name="logo" class="brand-logo" />"Büro"</h1>
                 <p class="muted">"Adresse deines Büro-Servers (z. B. aus CapRover):"</p>
                 <input type="url" placeholder="https://buero.example.com" required
                     prop:value=move || url.get()
@@ -140,7 +142,7 @@ fn Login(on_done: Callback<()>) -> impl IntoView {
     view! {
         <div class="center">
             <form class="card login" on:submit=submit>
-                <h1>"📁 Büro"</h1>
+                <h1 class="brand-name"><Icon name="logo" class="brand-logo" />"Büro"</h1>
                 <input type="password" placeholder="Passwort" autofocus
                     prop:value=move || pw.get()
                     on:input=move |ev| pw.set(event_target_value(&ev)) />

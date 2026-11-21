@@ -6,6 +6,7 @@ use leptos::task::spawn_local;
 use shared::{Collection, DocumentDetail, DocumentSummary, DocumentUpdate, Tag, TagInput};
 
 use crate::api::open_external;
+use crate::icons::Icon;
 use crate::state::{collection_path, ctx, Ctx};
 use crate::util::{format_size, format_ts, status_label};
 
@@ -162,13 +163,13 @@ fn DetailBody(
             <input class="title-input" prop:value=move || title.get()
                 on:input=move |ev| title.set(event_target_value(&ev))
                 on:change=move |_| save(c, id, DocumentUpdate { title: Some(title.get_untracked()), ..Default::default() }, detail) />
-            <button class="icon" title="Schließen (Esc)" on:click=move |_| c.selected.set(None)>"✕"</button>
+            <button class="icon" title="Schließen (Esc)" on:click=move |_| c.selected.set(None)><Icon name="x" /></button>
         </div>
         <div class="actions">
-            <button on:click=move |_| open_external(&open_url)>"↗ Öffnen"</button>
-            <button on:click=move |_| open_external(&download_url)>"⬇ Herunterladen"</button>
+            <button on:click=move |_| open_external(&open_url)><Icon name="external" />"Öffnen"</button>
+            <button on:click=move |_| open_external(&download_url)><Icon name="download" />"Herunterladen"</button>
             <button title="Bearbeitete Datei als neue Version hochladen"
-                on:click=move |_| { if let Some(i) = version_input.get() { i.click(); } }>"⟳ Neue Version"</button>
+                on:click=move |_| { if let Some(i) = version_input.get() { i.click(); } }><Icon name="history" />"Neue Version"</button>
             <input type="file" style="display:none" node_ref=version_input on:change=move |_| {
                 let Some(i) = version_input.get() else { return };
                 let Some(f) = i.files().and_then(|f| f.get(0)) else { return };
@@ -182,7 +183,7 @@ fn DetailBody(
                     }
                 });
             } />
-            <button class="danger" on:click=move |_| {
+            <button class="danger" title="Löschen" on:click=move |_| {
                 if window().confirm_with_message("Dokument inkl. aller Versionen endgültig löschen?").unwrap_or(false) {
                     spawn_local(async move {
                         match c.api.send_empty::<()>("DELETE", &format!("/api/documents/{id}"), None).await {
@@ -191,7 +192,7 @@ fn DetailBody(
                         }
                     });
                 }
-            }>"🗑"</button>
+            }><Icon name="trash" /></button>
         </div>
         {(!status.is_empty()).then(|| view! {
             <div class="notice" class:bad=s.extract_status == "failed">
@@ -292,7 +293,7 @@ fn CollectionPicker(id: i64, detail: RwSignal<Option<DocumentDetail>>) -> impl I
         <div class="chips">
             {move || assigned().into_iter().map(|cid| view! {
                 <span class="chip coll removable" title="Entfernen" on:click=move |_| toggle(cid, false)>
-                    "🗂 "{c.collection_name(cid)}" ✕"
+                    <Icon name="folder" class="sm" />{c.collection_name(cid)}<Icon name="x" class="sm" />
                 </span>
             }).collect_view()}
         </div>
@@ -386,7 +387,7 @@ fn TagEditor(id: i64, detail: RwSignal<Option<DocumentDetail>>) -> impl IntoView
                         let mut ids = assigned_now();
                         ids.retain(|x| *x != tid);
                         set_tags(ids);
-                    }>"#"{name}" ✕"</span>
+                    }><Icon name="tag" class="sm" />{name}<Icon name="x" class="sm" /></span>
                 }
             }).collect_view()}
             <input class="tag-input" list="tag-suggestions" placeholder="+ Tag"
