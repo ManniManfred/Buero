@@ -36,7 +36,8 @@ COPY crates/shared crates/shared
 COPY crates/server crates/server
 COPY crates/web crates/web
 COPY about.toml about.hbs ./
-RUN cargo about generate --offline about.hbs -o crates/web/licenses.html \
+RUN cargo fetch \
+ && cargo about generate --offline about.hbs -o crates/web/licenses.html \
  && touch crates/shared/src/lib.rs crates/server/src/main.rs crates/web/src/main.rs \
  && cd crates/web && trunk build --release \
  && cd /src && cargo build --release -p buero-server
