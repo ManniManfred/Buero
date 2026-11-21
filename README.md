@@ -61,10 +61,21 @@ Standardprogramm des Systems).
 
 ### Kontinuierliches Deployment (empfohlen)
 
-Bei jedem Push auf `main` baut GitHub Actions das Image
-(`ghcr.io/mannimanfred/buero`) und rollt es automatisch auf CapRover aus
-(`.github/workflows/docker.yml`). Der CapRover-Server muss dafür nichts
-kompilieren.
+Gebaut und ausgerollt wird **nur bei einem Versions-Tag** (`v*`): GitHub
+Actions baut dann das Image (`ghcr.io/mannimanfred/buero:v1.2.3`, zusätzlich
+`:1.2` und `:latest`) und rollt es automatisch auf CapRover aus
+(`.github/workflows/docker.yml`). Normale Pushes auf `main` lösen nichts aus.
+Der CapRover-Server muss nichts kompilieren.
+
+Neue Version veröffentlichen:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+(oder auf GitHub unter *Releases → Draft a new release* einen neuen Tag
+anlegen). Derselbe Tag baut auch die Desktop-Installer als Release-Entwurf.
 
 Einmalige Einrichtung:
 
@@ -84,12 +95,13 @@ Einmalige Einrichtung:
    | `CAPROVER_APP` | `buero` |
    | `CAPROVER_APP_TOKEN` | Token aus Schritt 2 |
 
-4. Workflow einmal starten (*Actions* → *Docker-Image & CapRover-Deploy* →
-   *Run workflow*) oder einfach auf `main` pushen.
+4. Einen Tag pushen (siehe oben). Einen bestehenden Tag erneut ausrollen:
+   *Actions* → *Docker-Image & CapRover-Deploy* → *Run workflow* und dort
+   unter *Use workflow from* den Tag auswählen.
 
-Jedes Deployment verwendet ein Image mit Commit-Kennung (`sha-abc1234`), in
-CapRover ist so unter *Deployment* jede Version nachvollziehbar und per
-*Revert* zurückrollbar. Fehlen die Secrets, wird nur das Image gebaut.
+Jedes Deployment verwendet das Image mit der Versionsnummer, in CapRover ist
+so unter *Deployment* jede Version nachvollziehbar und per *Revert*
+zurückrollbar. Fehlen die Secrets, wird nur das Image gebaut.
 
 Alternativ ohne GitHub Actions: `caprover deploy` im Projektordner baut über
 `captain-definition` + `Dockerfile` direkt auf dem Server (braucht einige
