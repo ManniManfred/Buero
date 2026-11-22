@@ -12,6 +12,12 @@ pub struct Config {
     pub ocr_enabled: bool,
     pub ocr_lang: String,
     pub max_upload_bytes: usize,
+    /// Höchstgröße einer Datei beim Hochladen über einen Freigabelink
+    pub share_max_upload_bytes: usize,
+    /// Höchstens so viele Dateien pro Stunde und Freigabelink
+    pub share_uploads_per_hour: u32,
+    /// Höchstens so viele PDF-Seiten per OCR erkennen
+    pub ocr_max_pages: u32,
     pub workers: usize,
     pub session_days: i64,
     /// Öffentliche Adresse von Büro (z. B. `https://buero.example.com`), wird für
@@ -48,6 +54,13 @@ impl Config {
                 .unwrap_or(1024)
                 * 1024
                 * 1024,
+            share_max_upload_bytes: env("BUERO_SHARE_MAX_UPLOAD_MB")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(100)
+                * 1024
+                * 1024,
+            share_uploads_per_hour: env("BUERO_SHARE_UPLOADS_PER_HOUR").and_then(|v| v.parse().ok()).unwrap_or(50),
+            ocr_max_pages: env("BUERO_OCR_MAX_PAGES").and_then(|v| v.parse().ok()).unwrap_or(100),
             workers: env("BUERO_WORKERS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(|| num_cpus::get().clamp(1, 8)),

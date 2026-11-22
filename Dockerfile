@@ -69,8 +69,12 @@ LABEL org.opencontainers.image.title="Büro" \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       poppler-utils tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng ca-certificates tini \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system buero \
+ && useradd --system --gid buero --home-dir /data --no-create-home --shell /usr/sbin/nologin buero
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 COPY --from=builder /src/target/release/buero-server /usr/local/bin/buero-server
 COPY --from=builder /src/crates/web/dist /app/web
 COPY --from=tupfer /tupfer /app/tupfer
@@ -88,5 +92,6 @@ VOLUME ["/data"]
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=5s CMD ["/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PORT} && printf 'GET /api/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ok <&3"]
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
+# Startet als root, übergibt /data an „buero“ und läuft dann ohne root-Rechte
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["buero-server"]

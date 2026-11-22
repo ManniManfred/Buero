@@ -47,6 +47,8 @@ pub struct Api {
     /// Basis-URL des Servers, leer = gleicher Ursprung (Web)
     pub base: RwSignal<String>,
     pub token: RwSignal<Option<String>>,
+    /// Kurzlebiger Schlüssel für Datei-Links (nie das Sitzungs-Token in URLs)
+    pub file_key: RwSignal<String>,
     /// Wird bei 401 gesetzt, damit die Anmeldung erscheint
     pub unauthorized: RwSignal<bool>,
 }
@@ -57,6 +59,7 @@ impl Api {
         Api {
             base: RwSignal::new(base),
             token: RwSignal::new(load(KEY_TOKEN)),
+            file_key: RwSignal::new(String::new()),
             unauthorized: RwSignal::new(false),
         }
     }
@@ -69,6 +72,9 @@ impl Api {
 
     pub fn set_token(&self, token: Option<String>) {
         save(KEY_TOKEN, token.as_deref());
+        if token.is_none() {
+            self.file_key.set(String::new());
+        }
         self.token.set(token);
     }
 
@@ -77,14 +83,29 @@ impl Api {
     }
 
     /// URL für Dateien, die direkt vom Browser geladen werden (img, iframe, Download).
+    /// Enthält den Datei-Schlüssel – gilt nur zum Lesen von Dateien und nur einige Stunden.
     pub fn file_url(&self, path: &str) -> String {
         let mut u = self.url(path);
-        if let Some(t) = self.token.get_untracked() {
+        let k = self.file_key.get_untracked();
+        if !k.is_empty() {
             u.push(if u.contains('?') { '&' } else { '?' });
-            u.push_str("token=");
-            u.push_str(&t);
+            u.push_str("fk=");
+            u.push_str(&k);
         }
         u
+    }
+
+    /// Datei-Schlüssel holen bzw. erneuern
+    pub async fn load_file_key(&self) -> Result<(), String> {
+        let k = self.get::<shared::FileKey>("/api/auth/file-key").await?;
+        self.file_key.set(k.key);
+        Ok(())
+    }
+
+    /// Wenige Minuten gültiger Link (z. B. Backup-Download), absolute URL
+    pub async fn signed_link(&self, path: &str) -> Result<String, String> {
+        let l = self.send::<_, shared::SignedLink>("POST", path, &()).await?;
+        Ok(self.url(&l.path))
     }
 
     fn auth(&self, rb: RequestBuilder) -> RequestBuilder {

@@ -146,6 +146,9 @@ Minuten und ca. 2–4 GB RAM).
 | `BUERO_OCR` | `true` | Texterkennung für Scans/Bilder an/aus |
 | `BUERO_OCR_LANG` | `deu+eng` | Tesseract-Sprachen |
 | `BUERO_MAX_UPLOAD_MB` | `1024` | Maximale Dateigröße |
+| `BUERO_SHARE_MAX_UPLOAD_MB` | `100` | Maximale Dateigröße beim Hochladen über einen Freigabelink |
+| `BUERO_SHARE_UPLOADS_PER_HOUR` | `50` | Höchstens so viele Dateien pro Stunde und Freigabelink |
+| `BUERO_OCR_MAX_PAGES` | `100` | Bei gescannten PDFs höchstens so viele Seiten per OCR erkennen |
 | `BUERO_WORKERS` | CPU-Kerne (max. 8) | Parallele Verarbeitung (Text/OCR) |
 | `BUERO_SESSION_DAYS` | `90` | Gültigkeit einer Anmeldung |
 | `BUERO_PUBLIC_URL` | aus Anfrage | Öffentliche Adresse, z. B. `https://buero.example.com` – für Euro-Office empfohlen |
@@ -153,6 +156,31 @@ Minuten und ca. 2–4 GB RAM).
 | `BUERO_OFFICE_JWT_SECRET` | – | JWT-Schlüssel des Document Servers (dort `JWT_SECRET`) |
 | `BUERO_DESKTOP_DIR` | `/app/desktop` (Docker) | Installationsdateien des Desktop-Clients, werden unter `/desktop/` zum Herunterladen angeboten |
 | `BUERO_TUPFER_DIR` | `/app/tupfer` (Docker) | Web-Version des Tupfer Designers, wird unter `/tupfer/` ausgeliefert. Fehlt sie, gibt es kein „Bearbeiten“ für `.tupfer` |
+
+### Sicherheit
+
+- **Passwort**: `BUERO_PASSWORD` schützt alles – ein langes Zufallspasswort
+  (20+ Zeichen) verwenden. Nach 5 Fehlversuchen wird die IP-Adresse gesperrt
+  (30 s, dann immer länger bis 1 h); parallele Versuche einer Adresse werden
+  abgelehnt. Hinter CapRover/nginx zählt die echte Adresse aus `X-Forwarded-For`.
+  Dasselbe gilt für Passwörter von Freigabelinks (gespeichert als Argon2-Hash).
+- **Abmelden**: Wird `BUERO_PASSWORD` geändert, sind beim nächsten Start alle
+  Anmeldungen beendet. In den Einstellungen meldet „Überall abmelden“ alle
+  Geräte ab.
+- **Keine Zugangsdaten in URLs**: Vorschau, Vorschaubilder und Downloads nutzen
+  einen Datei-Schlüssel, der nur Dateien lesen kann und nach 6–12 Stunden
+  abläuft; der Backup-Download einen 5 Minuten gültigen Link.
+- **Freigabelinks mit Upload**: Dateigröße und Anzahl pro Stunde sind begrenzt
+  (siehe oben). Ob eine Datei schon vorhanden war, erfährt der Hochladende nicht.
+- **Dateiverarbeitung**: Zeitlimits für pdftotext/pdftoppm/tesseract, OCR nur
+  für die ersten `BUERO_OCR_MAX_PAGES` Seiten, Schutz vor „Zip-Bomben“ in
+  Office-Dateien.
+- **Browser**: Content-Security-Policy, Einbetten nur durch die eigene Seite,
+  API-Aufrufe aus fremden Webseiten (CORS) nur für den Desktop-Client.
+- **Docker**: Der Server läuft als Benutzer `buero`, nicht als root. Beim
+  ersten Start nach dem Update übernimmt er den Datenordner (`chown`).
+- **Backups** enthalten alle Dokumente und `secret.key` unverschlüsselt – so
+  sicher aufbewahren wie den Server selbst.
 
 ### Euro-Office anbinden
 

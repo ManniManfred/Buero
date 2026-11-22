@@ -10,6 +10,7 @@ mod db;
 mod error;
 mod extract;
 mod search;
+mod security;
 mod sign;
 mod state;
 mod storage;
@@ -58,6 +59,7 @@ async fn run(config: &config::Config) -> anyhow::Result<bool> {
     let http = reqwest::Client::builder()
         .user_agent(concat!("buero/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(600))
         .build()?;
     match (&config.office_url, &config.office_jwt_secret) {
         (Some(u), Some(_)) => tracing::info!("Euro-Office angebunden: {u}"),
@@ -65,6 +67,8 @@ async fn run(config: &config::Config) -> anyhow::Result<bool> {
         _ => {}
     }
 
+    let epoch = security::init_auth(&config.data_dir, config.password.as_deref(), &pool).await?;
+    let csp = security::build_csp(&config.web_dir, config.office_url.as_deref());
     let restart = tokio_util::sync::CancellationToken::new();
     let state = state::AppState {
         inner: Arc::new(state::Inner {
@@ -77,6 +81,11 @@ async fn run(config: &config::Config) -> anyhow::Result<bool> {
             http,
             restart: restart.clone(),
             restoring: Default::default(),
+            epoch: std::sync::RwLock::new(epoch),
+            csp,
+            login_limit: security::Limiter::new("Anmeldung"),
+            share_limit: security::Limiter::new("Freigabe-Passwort"),
+            share_uploads: Default::default(),
         }),
     };
 
@@ -91,7 +100,7 @@ async fn run(config: &config::Config) -> anyhow::Result<bool> {
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!("Büro-Server läuft auf http://{}", config.bind);
     let stop = restart.clone();
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(async move {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}

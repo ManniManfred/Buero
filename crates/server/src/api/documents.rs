@@ -115,7 +115,8 @@ pub(crate) struct UploadForm {
 
 /// Multipart-Formular lesen: beliebig viele Felder `file`, optional
 /// `collection_ids`, `tag_ids` (kommagetrennt), `title` und `document_date`.
-pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart) -> AppResult<UploadForm> {
+/// `max_bytes`: Höchstgröße pro Datei.
+pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_bytes: usize) -> AppResult<UploadForm> {
     let mut f = UploadForm { link_duplicates: true, ..Default::default() };
     let res: AppResult<()> = async {
         while let Some(field) = mp.next_field().await? {
@@ -129,7 +130,7 @@ pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart) -> AppRe
                     let mime = guess_mime(&filename, field.content_type());
                     let staged = st
                         .storage
-                        .stage(Box::pin(field), st.config.max_upload_bytes)
+                        .stage(Box::pin(field), max_bytes)
                         .await
                         .map_err(|e| AppError::bad_request(format!("{filename}: {e}")))?;
                     f.uploads.push(Upload { staged, filename, mime });
@@ -159,7 +160,7 @@ pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart) -> AppRe
 }
 
 pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<Json<Vec<UploadResult>>> {
-    let form = read_upload_form(&st, &mut mp).await?;
+    let form = read_upload_form(&st, &mut mp, st.config.max_upload_bytes).await?;
     Ok(Json(store_uploads(&st, form).await?))
 }
 

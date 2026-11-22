@@ -98,6 +98,23 @@ pub fn Settings() -> impl IntoView {
                             let _ = window().location().reload();
                         });
                     }>"Abmelden"</button>
+                    <button title="Beendet alle Anmeldungen auf allen Geräten, auch diese" on:click=move |_| {
+                        if !window().confirm_with_message("Auf allen Geräten abmelden? Danach muss man sich überall neu anmelden.").unwrap_or(false) {
+                            return;
+                        }
+                        spawn_local(async move {
+                            match c.api.send_empty::<()>("POST", "/api/auth/logout-all", None).await {
+                                Ok(()) => {
+                                    if is_desktop() {
+                                        crate::components::drive::sync(c, false);
+                                    }
+                                    c.api.set_token(None);
+                                    let _ = window().location().reload();
+                                }
+                                Err(e) => c.notify(e, true),
+                            }
+                        });
+                    }>"Überall abmelden"</button>
                     <button class="primary" on:click=move |_| close()>"Schließen"</button>
                 </div>
             </div>
@@ -112,12 +129,18 @@ fn BackupSection() -> impl IntoView {
     let input = NodeRef::<leptos::html::Input>::new();
     let busy = RwSignal::new(false);
 
-    let download = move |ev: leptos::ev::MouseEvent| {
-        // Der Download läuft am Browser vorbei, im Desktop-Client im Standardbrowser
-        if is_desktop() {
-            ev.prevent_default();
-            crate::api::open_external(&c.api.file_url("/api/admin/backup"));
-        }
+    // Backup über einen signierten, fünf Minuten gültigen Link laden
+    // (im Desktop-Client im Standardbrowser)
+    let download = move |_| {
+        spawn_local(async move {
+            match c.api.signed_link("/api/admin/backup-link").await {
+                Ok(url) if is_desktop() => crate::api::open_external(&url),
+                Ok(url) => {
+                    let _ = window().location().assign(&url);
+                }
+                Err(e) => c.notify(e, true),
+            }
+        });
     };
 
     let restore = move |_| {
@@ -157,9 +180,9 @@ fn BackupSection() -> impl IntoView {
             "Das Backup enthält alle Dokumente mit ihren Versionen, Sammlungen, Schlagwörter, Freigaben "
             "und den Schlüssel für Freigabelinks. Der Suchindex wird nach dem Einspielen neu aufgebaut."
         </p>
-        <a class="button" href=move || c.api.file_url("/api/admin/backup") download="" on:click=download>
+        <button on:click=download>
             <crate::icons::Icon name="download" />"Backup herunterladen"
-        </a>
+        </button>
         <button disabled=move || busy.get() on:click=move |_| { if let Some(i) = input.get() { i.click(); } }>
             <crate::icons::Icon name="upload" />
             {move || if busy.get() { "Wird eingespielt …" } else { "Aus Backup wiederherstellen" }}

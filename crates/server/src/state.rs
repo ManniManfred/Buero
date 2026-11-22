@@ -28,6 +28,16 @@ pub struct Inner {
     pub restart: tokio_util::sync::CancellationToken,
     /// Eine Wiederherstellung ist vorbereitet oder läuft
     pub restoring: std::sync::atomic::AtomicBool,
+    /// Sitzungs-Epoche (ändert sich bei „Überall abmelden“ und Passwortwechsel)
+    pub epoch: std::sync::RwLock<String>,
+    /// Content-Security-Policy der Oberfläche
+    pub csp: axum::http::HeaderValue,
+    /// Bremse für falsche Anmelde-Passwörter
+    pub login_limit: crate::security::Limiter,
+    /// Bremse für falsche Passwörter von Freigabelinks
+    pub share_limit: crate::security::Limiter,
+    /// Uploads pro Freigabelink und Stunde
+    pub share_uploads: crate::security::UploadCounter,
 }
 
 impl std::ops::Deref for AppState {

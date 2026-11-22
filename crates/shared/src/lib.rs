@@ -201,6 +201,22 @@ pub struct LoginResponse {
     pub token: String,
 }
 
+/// Kurzlebiger Schlüssel für Datei-Links (Vorschau, Vorschaubilder, Download),
+/// damit das Sitzungs-Token nie in einer URL steht.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FileKey {
+    /// Leer, wenn keine Anmeldung nötig ist
+    pub key: String,
+    pub expires_at: i64,
+}
+
+/// Signierter, wenige Minuten gültiger Link (z. B. Backup-Download)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedLink {
+    /// Pfad samt Abfrage, relativ zur Server-Adresse
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatus {
     pub auth_required: bool,

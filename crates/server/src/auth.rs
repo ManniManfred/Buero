@@ -2,7 +2,10 @@
 // Copyright (C) 2026 Manfred Roßkamp
 
 //! Einfache Einzelbenutzer-Anmeldung: Passwort aus `BUERO_PASSWORD`,
-//! danach Bearer-Token (oder `?token=` für Downloads/Vorschau).
+//! danach Bearer-Token im `Authorization`-Header. Dateien, die der Browser
+//! direkt lädt (Vorschau, Vorschaubilder, Download), nutzen stattdessen
+//! kurzlebige signierte Schlüssel (siehe `security`), damit das Sitzungs-Token
+//! nie in einer URL – und damit in Protokollen oder im Verlauf – landet.
 
 use axum::extract::{Request, State};
 use axum::http::header;
@@ -25,16 +28,8 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 pub fn token_from_request(req: &Request) -> Option<String> {
-    if let Some(v) = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if let Some(t) = v.strip_prefix("Bearer ") {
-            return Some(t.trim().to_string());
-        }
-    }
-    req.uri().query().and_then(|q| {
-        q.split('&')
-            .find_map(|kv| kv.strip_prefix("token="))
-            .map(|t| t.to_string())
-    })
+    let v = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
+    v.strip_prefix("Bearer ").map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 pub async fn is_valid(state: &AppState, token: &str) -> bool {
@@ -61,6 +56,7 @@ pub async fn require_auth(
     }
     match token_from_request(&req) {
         Some(t) if is_valid(&state, &t).await => Ok(next.run(req).await),
+        _ if crate::security::signed_access(&state, &req) => Ok(next.run(req).await),
         _ => Err(AppError::unauthorized()),
     }
 }

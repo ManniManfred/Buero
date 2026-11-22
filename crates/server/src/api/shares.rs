@@ -5,7 +5,9 @@
 //! Untersammlungen) ohne Anmeldung zugänglich machen – optional mit Passwort,
 //! Ablaufdatum und Upload-Möglichkeit.
 
-use axum::extract::{Multipart, Path, Query, Request, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Multipart, Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::Json;
@@ -21,6 +23,7 @@ use shared::{PublicDocument, PublicShare, Share, ShareInput, ShareKey, ShareUnlo
 use super::documents::{read_upload_form, serve, serve_document, store_uploads};
 use crate::auth::constant_time_eq;
 use crate::db;
+use crate::security;
 use crate::error::{AppError, AppResult};
 use crate::sign;
 use crate::state::AppState;
@@ -44,15 +47,11 @@ struct ShareRow {
 const SHARE_COLS: &str = "id, token, document_id, collection_id, password_hash, allow_upload, expires_at, \
     note, created_at, access_count, last_access_at";
 
-fn hash_password(pw: &str) -> String {
-    let mut salt = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt);
-    let salt = hex::encode(salt);
-    let h = hex::encode(Sha256::digest(format!("{salt}{pw}").as_bytes()));
-    format!("{salt}${h}")
-}
-
-fn check_password(stored: &str, pw: &str) -> bool {
+/// Neue Passwörter: Argon2id. Ältere Freigaben haben noch `salz$sha256`.
+async fn check_password(stored: &str, pw: &str) -> bool {
+    if stored.starts_with("$argon2") {
+        return security::verify_password_async(pw.to_string(), stored.to_string()).await;
+    }
     let Some((salt, h)) = stored.split_once('$') else { return false };
     let calc = hex::encode(Sha256::digest(format!("{salt}{pw}").as_bytes()));
     constant_time_eq(calc.as_bytes(), h.as_bytes())
@@ -141,7 +140,10 @@ pub async fn create(State(st): State<AppState>, Json(i): Json<ShareInput>) -> Ap
     let mut bytes = [0u8; 24];
     rand::thread_rng().fill_bytes(&mut bytes);
     let token = URL_SAFE_NO_PAD.encode(bytes);
-    let pw = i.password.as_deref().filter(|p| !p.is_empty()).map(hash_password);
+    let pw = match i.password.clone().filter(|p| !p.is_empty()) {
+        Some(p) => Some(tokio::task::spawn_blocking(move || security::hash_password(&p)).await.map_err(anyhow::Error::from)?),
+        None => None,
+    };
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO shares (token, document_id, collection_id, password_hash, allow_upload, expires_at, note, created_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
@@ -277,6 +279,8 @@ pub async fn public_get(
 pub async fn public_unlock(
     State(st): State<AppState>,
     Path(token): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(u): Json<ShareUnlock>,
 ) -> AppResult<Json<ShareKey>> {
     let row: Option<ShareRow> = sqlx::query_as(&format!("SELECT {SHARE_COLS} FROM shares WHERE token = ?"))
@@ -287,14 +291,17 @@ pub async fn public_unlock(
     if row.expires_at.is_some_and(|e| e <= now()) {
         return Err(AppError::new(StatusCode::GONE, "Dieser Link ist abgelaufen"));
     }
-    match &row.password_hash {
-        None => Ok(Json(ShareKey { key: String::new() })),
-        Some(h) if check_password(h, &u.password) => Ok(Json(ShareKey { key: access_key(&st, &row).unwrap() })),
-        Some(_) => {
-            // Ausprobieren bremsen
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            Err(AppError::new(StatusCode::FORBIDDEN, "Falsches Passwort"))
-        }
+    let Some(h) = &row.password_hash else {
+        return Ok(Json(ShareKey { key: String::new() }));
+    };
+    // Ausprobieren bremsen: Sperre pro Adresse nach mehreren Fehlversuchen
+    let attempt = st.share_limit.begin(security::client_ip(peer, &headers))?;
+    if check_password(h, &u.password).await {
+        attempt.success();
+        Ok(Json(ShareKey { key: access_key(&st, &row).unwrap_or_default() }))
+    } else {
+        attempt.failed().await;
+        Err(AppError::new(StatusCode::FORBIDDEN, "Falsches Passwort"))
     }
 }
 
@@ -338,7 +345,25 @@ pub async fn public_upload(
     let Some(collection) = row.collection_id.filter(|_| row.allow_upload) else {
         return Err(AppError::new(StatusCode::FORBIDDEN, "Hochladen ist für diesen Link nicht erlaubt"));
     };
-    let mut form = read_upload_form(&st, &mut mp).await?;
+    let limit = st.config.share_uploads_per_hour;
+    let too_many = || {
+        AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("Über diesen Link sind höchstens {limit} Dateien pro Stunde möglich – bitte später erneut versuchen"),
+        )
+    };
+    if st.share_uploads.used(row.id) >= limit {
+        return Err(too_many());
+    }
+    let mut form = read_upload_form(&st, &mut mp, st.config.share_max_upload_bytes).await?;
+    let n = form.uploads.len() as u32;
+    if st.share_uploads.used(row.id) + n > limit {
+        for u in &form.uploads {
+            st.storage.discard(&u.staged).await;
+        }
+        return Err(too_many());
+    }
+    st.share_uploads.add(row.id, n);
     // Empfänger bestimmen nur die Dateien – Ziel ist immer die freigegebene Sammlung
     form.collections = vec![collection];
     form.tags.clear();
@@ -347,6 +372,7 @@ pub async fn public_upload(
     form.link_duplicates = false;
     let results = store_uploads(&st, form).await?;
     let stored = results.iter().filter(|r| !r.duplicate).count();
-    tracing::info!("Freigabe {}: {stored} Datei(en) hochgeladen", row.id);
-    Ok(Json(serde_json::json!({ "stored": stored, "duplicates": results.len() - stored })))
+    tracing::info!("Freigabe {}: {stored} Datei(en) hochgeladen ({} bereits vorhanden)", row.id, results.len() - stored);
+    // Nicht verraten, ob eine Datei schon im Archiv liegt
+    Ok(Json(serde_json::json!({ "stored": results.len(), "duplicates": 0 })))
 }

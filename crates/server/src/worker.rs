@@ -75,6 +75,7 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
         ocr: state.config.ocr_enabled,
         ocr_lang: state.config.ocr_lang.clone(),
         tmp_dir: state.storage.tmp_dir(),
+        ocr_max_pages: state.config.ocr_max_pages,
     };
     let (text, pages, err) = match extract::extract(&path, &doc.extension, &opts).await {
         Ok(e) => (e.text, e.page_count, None),

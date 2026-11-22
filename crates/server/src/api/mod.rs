@@ -57,6 +57,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/backup", get(backup::backup))
         .route("/api/admin/restore", post(backup::restore).layer(DefaultBodyLimit::disable()))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/logout-all", post(auth::logout_all))
+        .route("/api/auth/file-key", get(auth::file_key))
+        .route("/api/admin/backup-link", post(auth::backup_link))
         .route("/api/mcp/tokens", get(mcp::list_tokens).post(mcp::create_token))
         .route("/api/mcp/tokens/{id}", axum::routing::delete(mcp::delete_token))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::require_auth));
@@ -96,9 +99,26 @@ pub fn router(state: AppState) -> Router {
         .fallback_service(spa)
         .layer(DefaultBodyLimit::max(state.config.max_upload_bytes + 1024 * 1024))
         .layer(CompressionLayer::new())
-        .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn_with_state(state.clone(), crate::security::security_headers))
+        .layer(cors())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Fremde Seiten dürfen die API nicht aus dem Browser heraus aufrufen – nur der
+/// Desktop-Client (Tauri), dessen Oberfläche von einem eigenen Ursprung kommt.
+fn cors() -> CorsLayer {
+    use axum::http::HeaderValue;
+    use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin};
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list([
+            HeaderValue::from_static("tauri://localhost"),
+            HeaderValue::from_static("http://tauri.localhost"),
+            HeaderValue::from_static("https://tauri.localhost"),
+        ]))
+        .allow_methods(AllowMethods::mirror_request())
+        .allow_headers(AllowHeaders::mirror_request())
+        .max_age(std::time::Duration::from_secs(3600))
 }
 
 async fn stats(State(st): State<AppState>) -> AppResult<Json<Stats>> {

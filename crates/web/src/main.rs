@@ -51,6 +51,10 @@ fn App() -> impl IntoView {
             match c.api.get::<shared::AuthStatus>("/api/auth/status").await {
                 Ok(s) if s.authenticated => {
                     c.api.unauthorized.set(false);
+                    // Schlüssel für Vorschau & Co. vor dem ersten Bild holen
+                    if let Err(e) = c.api.load_file_key().await {
+                        c.notify(e, true);
+                    }
                     phase.set(Phase::Ready);
                     if api::is_desktop() {
                         components::drive::sync(c, true);
@@ -217,6 +221,22 @@ fn Main() -> impl IntoView {
         c.query.track();
         if prev.is_some() {
             c.dashboard.set(false);
+        }
+    });
+
+    // Datei-Schlüssel stündlich erneuern (er gilt 6–12 Stunden)
+    let key_refresh = set_interval_with_handle(
+        move || {
+            spawn_local(async move {
+                let _ = c.api.load_file_key().await;
+            });
+        },
+        std::time::Duration::from_secs(3600),
+    )
+    .ok();
+    on_cleanup(move || {
+        if let Some(h) = key_refresh {
+            h.clear();
         }
     });
 

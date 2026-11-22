@@ -29,7 +29,22 @@ pub struct ExtractOptions {
     pub ocr: bool,
     pub ocr_lang: String,
     pub tmp_dir: PathBuf,
+    /// Höchstens so viele PDF-Seiten per OCR erkennen
+    pub ocr_max_pages: u32,
 }
+
+/// Zeitlimits für die externen Programme (eine präparierte Datei darf die
+/// Verarbeitung nicht endlos blockieren)
+const T_INFO: u64 = 30;
+const T_TEXT: u64 = 180;
+const T_RENDER: u64 = 900;
+const T_THUMB: u64 = 60;
+const T_OCR_PAGE: u64 = 180;
+
+/// Grenzen für ZIP-Container (Office-Dateien), Schutz vor „Zip-Bomben“
+const ZIP_MAX_ENTRIES: usize = 20_000;
+const ZIP_MAX_ENTRY: u64 = 256 * 1024 * 1024;
+const ZIP_MAX_TOTAL: u64 = 1024 * 1024 * 1024;
 
 pub async fn extract(path: &Path, ext: &str, opts: &ExtractOptions) -> Result<Extracted> {
     let mut out = match ext {
@@ -46,7 +61,16 @@ pub async fn extract(path: &Path, ext: &str, opts: &ExtractOptions) -> Result<Ex
         "odt" | "odp" | "ott" => blocking_zip(path, |z| zip_xml(z, &["content.xml"], "")).await?,
         "xlsx" | "xlsm" | "xlsb" | "xls" | "ods" => {
             let p = path.to_path_buf();
-            tokio::task::spawn_blocking(move || spreadsheet(&p)).await??
+            let zipped = ext != "xls";
+            tokio::task::spawn_blocking(move || {
+                if zipped {
+                    let file = std::io::BufReader::new(std::fs::File::open(&p)?);
+                    let mut z = zip::ZipArchive::new(file).context("Ungültige Tabellendatei")?;
+                    check_zip(&mut z)?;
+                }
+                spreadsheet(&p)
+            })
+            .await??
         }
         "html" | "htm" => Extracted { text: strip_html(&read_text(path).await?), page_count: None },
         "rtf" => Extracted { text: strip_rtf(&read_text(path).await?), page_count: None },
@@ -110,14 +134,19 @@ async fn is_probably_text(path: &Path) -> bool {
     !buf.contains(&0) && (std::str::from_utf8(buf).is_ok() || n < 8192)
 }
 
-async fn run(cmd: &mut Command) -> Result<Vec<u8>> {
-    let out = cmd
+/// Startet ein Programm und bricht es nach `secs` Sekunden ab.
+async fn run(cmd: &mut Command, secs: u64) -> Result<Vec<u8>> {
+    let program = cmd.as_std().get_program().to_string_lossy().into_owned();
+    let fut = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .output()
+        .output();
+    // Bei Zeitüberschreitung wird der Prozess durch `kill_on_drop` beendet
+    let out = tokio::time::timeout(std::time::Duration::from_secs(secs), fut)
         .await
+        .map_err(|_| anyhow::anyhow!("{program} nach {secs} s abgebrochen"))?
         .with_context(|| format!("Programm konnte nicht gestartet werden: {cmd:?}"))?;
     if !out.status.success() {
         bail!(
@@ -130,7 +159,7 @@ async fn run(cmd: &mut Command) -> Result<Vec<u8>> {
 }
 
 async fn pdf_page_count(path: &Path) -> Option<i64> {
-    let out = run(Command::new("pdfinfo").arg(path)).await.ok()?;
+    let out = run(Command::new("pdfinfo").arg(path), T_INFO).await.ok()?;
     String::from_utf8_lossy(&out)
         .lines()
         .find_map(|l| l.strip_prefix("Pages:").and_then(|v| v.trim().parse().ok()))
@@ -138,7 +167,7 @@ async fn pdf_page_count(path: &Path) -> Option<i64> {
 
 async fn extract_pdf(path: &Path, opts: &ExtractOptions) -> Result<Extracted> {
     let pages = pdf_page_count(path).await;
-    let text = run(Command::new("pdftotext").args(["-layout", "-enc", "UTF-8"]).arg(path).arg("-"))
+    let text = run(Command::new("pdftotext").args(["-layout", "-enc", "UTF-8"]).arg(path).arg("-"), T_TEXT)
         .await
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .unwrap_or_default();
@@ -162,10 +191,14 @@ async fn ocr_pdf(path: &Path, opts: &ExtractOptions) -> Result<String> {
     let dir = opts.tmp_dir.join(format!("ocr-{:016x}", rand::random::<u64>()));
     tokio::fs::create_dir_all(&dir).await?;
     let result = async {
-        run(Command::new("pdftoppm")
-            .args(["-r", "300", "-gray", "-png"])
-            .arg(path)
-            .arg(dir.join("p")))
+        let last = opts.ocr_max_pages.max(1).to_string();
+        run(
+            Command::new("pdftoppm")
+                .args(["-r", "300", "-gray", "-png", "-l", &last])
+                .arg(path)
+                .arg(dir.join("p")),
+            T_RENDER,
+        )
         .await?;
         let mut pages = Vec::new();
         let mut rd = tokio::fs::read_dir(&dir).await?;
@@ -201,7 +234,7 @@ async fn ocr_image(path: &Path, lang: &str) -> Result<String> {
         .arg(path)
         .arg("stdout")
         .args(["-l", lang])
-        .env("OMP_THREAD_LIMIT", "1"))
+        .env("OMP_THREAD_LIMIT", "1"), T_OCR_PAGE)
     .await?;
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
@@ -216,9 +249,29 @@ where
     tokio::task::spawn_blocking(move || {
         let file = std::io::BufReader::new(std::fs::File::open(&p)?);
         let mut z = zip::ZipArchive::new(file).context("Ungültige Office-Datei")?;
+        check_zip(&mut z)?;
         Ok(Extracted { text: f(&mut z)?, page_count: None })
     })
     .await?
+}
+
+/// Lehnt ZIP-Container ab, die entpackt unverhältnismäßig groß würden.
+fn check_zip<R: std::io::Read + std::io::Seek>(z: &mut zip::ZipArchive<R>) -> Result<()> {
+    if z.len() > ZIP_MAX_ENTRIES {
+        bail!("Datei enthält zu viele Einträge ({})", z.len());
+    }
+    let mut total = 0u64;
+    for i in 0..z.len() {
+        let e = z.by_index_raw(i)?;
+        if e.size() > ZIP_MAX_ENTRY {
+            bail!("Eintrag „{}“ ist entpackt zu groß", e.name());
+        }
+        total += e.size();
+    }
+    if total > ZIP_MAX_TOTAL {
+        bail!("Datei ist entpackt zu groß");
+    }
+    Ok(())
 }
 
 /// Liest XML-Dateien aus einem ZIP-Container. `exact`: exakte Pfade,
@@ -245,9 +298,10 @@ fn zip_xml(z: &mut Zip, exact: &[&str], prefix: &str) -> Result<String> {
     }
     let mut text = String::new();
     for name in names {
-        let Ok(mut entry) = z.by_name(&name) else { continue };
+        let Ok(entry) = z.by_name(&name) else { continue };
+        // Angegebene Größen können lügen: nie mehr als die Grenze lesen
         let mut xml = String::new();
-        entry.read_to_string(&mut xml)?;
+        entry.take(ZIP_MAX_ENTRY).read_to_string(&mut xml)?;
         xml_text(&xml, &mut text);
         text.push('\n');
         if text.len() > MAX_TEXT {
@@ -475,7 +529,7 @@ pub async fn thumbnail(path: &Path, ext: &str, dest: &Path, tmp_dir: &Path) -> R
             run(Command::new("pdftoppm")
                 .args(["-f", "1", "-l", "1", "-singlefile", "-scale-to", "480", "-jpeg", "-jpegopt", "quality=80"])
                 .arg(path)
-                .arg(&prefix))
+                .arg(&prefix), T_THUMB)
             .await?;
             let produced = prefix.with_extension("jpg");
             tokio::fs::rename(&produced, dest).await?;
