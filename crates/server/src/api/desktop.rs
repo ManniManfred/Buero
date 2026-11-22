@@ -4,9 +4,16 @@
 //! Desktop-Client: Installationsdateien zum Herunterladen und Updates.
 //!
 //! Beide Endpunkte brauchen keine Anmeldung (die App soll sich auch vor dem
-//! ersten Login holen lassen). Die Dateien selbst liegen unter `/desktop/`.
+//! ersten Login holen lassen).
+//!
+//! Die Dateien kommen aus dem GitHub-Release zur Server-Version (`v1.2.3`,
+//! Repository aus `BUERO_DESKTOP_REPO`); Downloads und Updates zeigen direkt
+//! dorthin. Liegen Installationsdateien in `BUERO_DESKTOP_DIR`, werden
+//! stattdessen diese unter `/desktop/` angeboten (z. B. ohne Internet).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -33,27 +40,116 @@ pub fn server_version() -> &'static str {
     }
 }
 
-fn installers(dir: &Path) -> Vec<(String, PathBuf, u64)> {
+/// Eine angebotene Installationsdatei
+#[derive(Clone)]
+struct Installer {
+    name: String,
+    size: u64,
+    /// Adresse im GitHub-Release; `None` = lokal unter `/desktop/`
+    url: Option<String>,
+    /// Inhalt der Signatur (`<datei>.sig`), falls vorhanden
+    signature: Option<String>,
+}
+
+fn is_installer(name: &str) -> bool {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    name.contains('.') && EXTENSIONS.contains(&ext.as_str())
+}
+
+fn local_installers(dir: &Path) -> Vec<Installer> {
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
             let Ok(meta) = e.metadata() else { continue };
-            if meta.is_file() && name.contains('.') && EXTENSIONS.contains(&ext.as_str()) {
-                out.push((name, e.path(), meta.len()));
+            if meta.is_file() && is_installer(&name) {
+                let mut sig = e.path().into_os_string();
+                sig.push(".sig");
+                let signature = std::fs::read_to_string(sig).ok().map(|s| s.trim().to_string());
+                out.push(Installer { name, size: meta.len(), url: None, signature });
             }
         }
     }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// Zwischenspeicher für das GitHub-Release (Abfragen ohne Anmeldung sind
+/// auf 60 pro Stunde begrenzt)
+static RELEASE_CACHE: Mutex<Option<(Instant, Vec<Installer>)>> = Mutex::new(None);
+
+#[derive(Deserialize)]
+struct GhRelease {
+    #[serde(default)]
+    assets: Vec<GhAsset>,
+}
+
+#[derive(Deserialize)]
+struct GhAsset {
+    name: String,
+    size: u64,
+    browser_download_url: String,
+}
+
+async fn fetch_release(st: &AppState, repo: &str) -> anyhow::Result<Vec<Installer>> {
+    let url = format!("https://api.github.com/repos/{repo}/releases/tags/v{}", server_version());
+    let resp = st
+        .http
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        // Release (noch) nicht veröffentlicht
+        return Ok(Vec::new());
+    }
+    let release: GhRelease = resp.error_for_status()?.json().await?;
+    let mut out = Vec::new();
+    for a in release.assets.iter().filter(|a| is_installer(&a.name)) {
+        let sig_name = format!("{}.sig", a.name);
+        let signature = match release.assets.iter().find(|s| s.name == sig_name) {
+            Some(s) => {
+                let r = st.http.get(&s.browser_download_url).timeout(Duration::from_secs(20)).send().await?;
+                Some(r.error_for_status()?.text().await?.trim().to_string())
+            }
+            None => None,
+        };
+        out.push(Installer { name: a.name.clone(), size: a.size, url: Some(a.browser_download_url.clone()), signature });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+async fn installers(st: &AppState) -> Vec<Installer> {
+    let local = local_installers(&st.config.desktop_dir);
+    let Some(repo) = st.config.desktop_repo.as_deref().filter(|_| local.is_empty()) else {
+        return local;
+    };
+    if let Some((at, list)) = RELEASE_CACHE.lock().unwrap().as_ref() {
+        // Gefunden: länger merken; fehlt das Release noch (Desktop-Build läuft), bald erneut fragen
+        let ttl = if list.is_empty() { Duration::from_secs(120) } else { Duration::from_secs(1800) };
+        if at.elapsed() < ttl {
+            return list.clone();
+        }
+    }
+    let list = match fetch_release(st, repo).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("Desktop-Release von GitHub ({repo}) nicht abrufbar: {e}");
+            Vec::new()
+        }
+    };
+    *RELEASE_CACHE.lock().unwrap() = Some((Instant::now(), list.clone()));
+    list
 }
 
 pub async fn list(State(st): State<AppState>) -> Json<Vec<DesktopDownload>> {
     Json(
-        installers(&st.config.desktop_dir)
+        installers(&st)
+            .await
             .into_iter()
-            .map(|(name, _, size)| DesktopDownload { name, size })
+            .map(|i| DesktopDownload { name: i.name, size: i.size, url: i.url })
             .collect(),
     )
 }
@@ -115,34 +211,28 @@ fn matches(name: &str, target: &str, arch: &str, bundle: &str) -> bool {
 
 /// Update-Auskunft im Format des Tauri-Updaters. 204 = kein Update.
 /// Angeboten wird nur, was neben der Installationsdatei eine Signatur
-/// (`<datei>.sig`) hat; der Client prüft sie mit seinem eingebauten Schlüssel.
+/// (`<datei>.sig`) hat; der Client prüft sie mit seinem eingebauten Schlüssel
+/// (die Signatur schützt auch bei Downloads von GitHub).
 pub async fn update(State(st): State<AppState>, headers: HeaderMap, Query(q): Query<UpdateQuery>) -> Response {
     let version = server_version();
     if !q.version.is_empty() && !newer(version, &q.version) {
         return StatusCode::NO_CONTENT.into_response();
     }
-    let found = installers(&st.config.desktop_dir).into_iter().find_map(|(name, path, _)| {
-        if !matches(&name, &q.target, &q.arch, &q.bundle) {
-            return None;
-        }
-        let mut sig = path.into_os_string();
-        sig.push(".sig");
-        let signature = std::fs::read_to_string(sig).ok()?;
-        Some((name, signature))
-    });
-    let Some((name, signature)) = found else {
+    let found = installers(&st)
+        .await
+        .into_iter()
+        .find(|i| i.signature.is_some() && matches(&i.name, &q.target, &q.arch, &q.bundle));
+    let Some(Installer { name, url, signature: Some(signature), .. }) = found else {
         return StatusCode::NO_CONTENT.into_response();
     };
-    let url = format!(
-        "{}/desktop/{}",
-        st.public_base(&headers),
-        percent_encoding::utf8_percent_encode(&name, FILE_NAME)
-    );
+    let url = url.unwrap_or_else(|| {
+        format!("{}/desktop/{}", st.public_base(&headers), percent_encoding::utf8_percent_encode(&name, FILE_NAME))
+    });
     Json(serde_json::json!({
         "version": version,
         "notes": "",
         "url": url,
-        "signature": signature.trim(),
+        "signature": signature,
     }))
     .into_response()
 }

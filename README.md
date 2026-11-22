@@ -96,12 +96,10 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
 ### Kontinuierliches Deployment (empfohlen)
 
 Gebaut und ausgerollt wird **nur bei einem Versions-Tag** (`v*`): GitHub
-Actions baut dann sofort ein Image ohne Desktop-Installationsdateien
-(`ghcr.io/mannimanfred/buero:v1.2.3-web`) und rollt es auf CapRover aus – die
-Webseite ist so nach wenigen Minuten aktuell. Parallel entsteht der
-Desktop-Client; danach wird das endgültige Image (`:v1.2.3`, zusätzlich `:1.2`
-und `:latest`) mit dessen Installationsdateien gebaut und erneut ausgerollt
-(`.github/workflows/release.yml`). Normale Pushes auf `master` lösen nichts aus.
+Actions baut dann das Image (`ghcr.io/mannimanfred/buero:v1.2.3`, zusätzlich
+`:1.2` und `:latest`) und rollt es automatisch auf CapRover aus – ohne auf den
+Desktop-Client zu warten, der parallel entsteht und als GitHub-Release
+veröffentlicht wird (`.github/workflows/release.yml`). Normale Pushes auf `master` lösen nichts aus.
 Der CapRover-Server muss nichts kompilieren.
 
 Neue Version veröffentlichen:
@@ -112,7 +110,8 @@ git push origin v0.2.0
 ```
 
 (oder auf GitHub unter *Releases → Draft a new release* einen neuen Tag
-anlegen). Derselbe Tag baut auch die Desktop-Installer als Release-Entwurf.
+anlegen). Derselbe Tag baut auch die Desktop-Installer und veröffentlicht sie
+als GitHub-Release.
 
 Einmalige Einrichtung:
 
@@ -162,7 +161,8 @@ Minuten und ca. 2–4 GB RAM).
 | `BUERO_PUBLIC_URL` | aus Anfrage | Öffentliche Adresse, z. B. `https://buero.example.com` – für Euro-Office empfohlen |
 | `BUERO_OFFICE_URL` | – | Adresse des Euro-Office/OnlyOffice Document Servers, z. B. `https://eurooffice.example.com` |
 | `BUERO_OFFICE_JWT_SECRET` | – | JWT-Schlüssel des Document Servers (dort `JWT_SECRET`) |
-| `BUERO_DESKTOP_DIR` | `/app/desktop` (Docker) | Installationsdateien des Desktop-Clients, werden unter `/desktop/` zum Herunterladen angeboten |
+| `BUERO_DESKTOP_DIR` | `/app/desktop` (Docker) | Eigene Installationsdateien des Desktop-Clients (statt GitHub), werden unter `/desktop/` angeboten |
+| `BUERO_DESKTOP_REPO` | `ManniManfred/Buero` | GitHub-Repository, dessen Release zur Server-Version die Desktop-Installer liefert; `off` = aus |
 | `BUERO_TUPFER_DIR` | `/app/tupfer` (Docker) | Web-Version des Tupfer Designers, wird unter `/tupfer/` ausgeliefert. Fehlt sie, gibt es kein „Bearbeiten“ für `.tupfer` |
 
 ### Sicherheit
@@ -257,14 +257,17 @@ aufgebaut.
 
 Installationsdateien für Windows (`.msi`/`.exe`) und Linux (`.deb`, `.rpm`,
 `.AppImage`) baut GitHub Actions beim Pushen eines Tags `v*`
-(`.github/workflows/release.yml`) als Release-Entwurf.
+(`.github/workflows/release.yml`) und veröffentlicht sie als GitHub-Release.
 
-**Download über die Weboberfläche:** Das Docker-Image enthält die
-Installationsdateien derselben Version. Die Webseite bietet sie unter
-*Einstellungen → Desktop-App* an (passend zum eigenen System hervorgehoben)
-und auf der Anmeldeseite als Link. Ohne Docker die Dateien in den Ordner
-`BUERO_DESKTOP_DIR` (Standard `./desktop-dist`) legen; ist er leer, verweist
-die Webseite auf die GitHub-Releases.
+**Download über die Weboberfläche:** Der Server fragt bei GitHub das Release
+zu seiner eigenen Version ab (`v1.2.3`, zwischengespeichert) und bietet dessen
+Dateien unter *Einstellungen → Desktop-App* (passend zum eigenen System
+hervorgehoben) und auf der Anmeldeseite als Link an – heruntergeladen wird
+direkt von GitHub. Läuft der Desktop-Build nach dem Ausrollen noch, erscheinen
+die Dateien nach wenigen Minuten. Ein anderes Repository (z. B. ein Fork) lässt
+sich mit `BUERO_DESKTOP_REPO=besitzer/name` einstellen, `off` schaltet die
+Abfrage ab. Ohne Internet die Dateien in den Ordner `BUERO_DESKTOP_DIR` legen;
+liegen dort welche, werden nur diese (unter `/desktop/`) angeboten.
 
 Beim ersten Start fragt der Client nach der Server-Adresse
 (z. B. `https://buero.deine-domain.de`), danach nach dem Passwort.
@@ -289,7 +292,8 @@ einrichten:
    `crates/desktop/tauri.conf.json` unter `plugins.updater.pubkey` eintragen.
 
 Der Release-Workflow signiert dann alle Installationsdateien (`*.sig`) und
-legt sie mit ins Docker-Image. Ohne Secret wird weiter gebaut, nur ohne
+lädt die Signaturen mit ins GitHub-Release; der Server reicht sie an den
+Client weiter, der sie vor dem Installieren prüft. Ohne Secret wird weiter gebaut, nur ohne
 Updates; ohne `pubkey` sucht der Client nicht nach Updates. Der private
 Schlüssel darf nicht verloren gehen – mit einem neuen Schlüssel lassen sich
 bestehende Installationen nicht mehr automatisch aktualisieren.

@@ -44,8 +44,11 @@ fn describe(name: &str) -> (Os, &'static str) {
     }
 }
 
-fn file_url(api: crate::api::Api, name: &str) -> String {
-    api.url(&format!("/desktop/{}", String::from(js_sys::encode_uri_component(name))))
+fn file_url(api: crate::api::Api, f: &DesktopDownload) -> String {
+    match &f.url {
+        Some(u) => u.clone(),
+        None => api.url(&format!("/desktop/{}", String::from(js_sys::encode_uri_component(&f.name)))),
+    }
 }
 
 fn load(files: RwSignal<Option<Vec<DesktopDownload>>>) {
@@ -89,7 +92,7 @@ pub fn DesktopSection() -> impl IntoView {
                         let size = crate::util::format_size(f.size as i64);
                         view! {
                             <li class:recommended=fos == os && os != Os::Other>
-                                <a href=file_url(api, &f.name) download=f.name.clone()>
+                                <a href=file_url(api, &f) download=f.name.clone()>
                                     <Icon name="download" />
                                     <span class="download-label">{label}</span>
                                 </a>
@@ -139,7 +142,7 @@ pub fn DesktopLoginLink() -> impl IntoView {
         let f = preferred(&files, os)?;
         let label = if os == Os::Windows { "Desktop-App für Windows herunterladen" } else { "Desktop-App für Linux herunterladen" };
         Some(view! {
-            <a class="small muted login-download" href=file_url(api, &f.name) download=f.name.clone()>
+            <a class="small muted login-download" href=file_url(api, f) download=f.name.clone()>
                 <Icon name="download" />{label}
             </a>
         })

@@ -31,6 +31,9 @@ pub struct Config {
     pub tupfer_dir: PathBuf,
     /// Installationsdateien des Desktop-Clients, werden unter `/desktop/` zum Herunterladen angeboten
     pub desktop_dir: PathBuf,
+    /// GitHub-Repository (`besitzer/name`), dessen Release zur Server-Version die
+    /// Installationsdateien liefert, wenn `desktop_dir` keine enthält; `None` = aus
+    pub desktop_repo: Option<String>,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -72,6 +75,11 @@ impl Config {
             office_jwt_secret: env("BUERO_OFFICE_JWT_SECRET"),
             tupfer_dir: env("BUERO_TUPFER_DIR").unwrap_or_else(|| "./tupfer".into()).into(),
             desktop_dir: env("BUERO_DESKTOP_DIR").unwrap_or_else(|| "./desktop-dist".into()).into(),
+            desktop_repo: match env("BUERO_DESKTOP_REPO") {
+                Some(r) if matches!(r.trim(), "0" | "off" | "false") => None,
+                Some(r) => Some(r.trim().trim_matches('/').to_string()),
+                None => Some(env!("CARGO_PKG_REPOSITORY").trim_start_matches("https://github.com/").to_string()),
+            },
         }
     }
 }

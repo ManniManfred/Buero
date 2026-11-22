@@ -390,11 +390,14 @@ pub struct Features {
 }
 
 /// Installationsdatei des Desktop-Clients, die der Server zum Herunterladen anbietet
-/// (unter `/desktop/{name}`)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DesktopDownload {
     pub name: String,
     pub size: u64,
+    /// Download-Adresse (GitHub-Release); fehlt sie, liegt die Datei auf dem
+    /// Server unter `/desktop/{name}`
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
