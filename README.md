@@ -13,7 +13,7 @@ genauso wie Word-, Excel- oder Markdown-Dateien. Komplett in **Rust**:
 Webseite und Desktop-Client sind derselbe Code: Der Desktop-Client lädt die
 gleiche WebAssembly-Oberfläche und spricht dieselbe API an. Unterschiede gibt es
 nur dort, wo es nötig ist (frei wählbare Server-Adresse, Dateien öffnen mit dem
-Standardprogramm des Systems).
+Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
 
 ## Funktionen
 
@@ -75,9 +75,10 @@ Standardprogramm des Systems).
 ### Kontinuierliches Deployment (empfohlen)
 
 Gebaut und ausgerollt wird **nur bei einem Versions-Tag** (`v*`): GitHub
-Actions baut dann das Image (`ghcr.io/mannimanfred/buero:v1.2.3`, zusätzlich
-`:1.2` und `:latest`) und rollt es automatisch auf CapRover aus
-(`.github/workflows/docker.yml`). Normale Pushes auf `master` lösen nichts aus.
+Actions baut dann zuerst den Desktop-Client, danach das Image
+(`ghcr.io/mannimanfred/buero:v1.2.3`, zusätzlich `:1.2` und `:latest`) mit
+dessen Installationsdateien und rollt es automatisch auf CapRover aus
+(`.github/workflows/release.yml`). Normale Pushes auf `master` lösen nichts aus.
 Der CapRover-Server muss nichts kompilieren.
 
 Neue Version veröffentlichen:
@@ -135,6 +136,7 @@ Minuten und ca. 2–4 GB RAM).
 | `BUERO_PUBLIC_URL` | aus Anfrage | Öffentliche Adresse, z. B. `https://buero.example.com` – für Euro-Office empfohlen |
 | `BUERO_OFFICE_URL` | – | Adresse des Euro-Office/OnlyOffice Document Servers, z. B. `https://eurooffice.example.com` |
 | `BUERO_OFFICE_JWT_SECRET` | – | JWT-Schlüssel des Document Servers (dort `JWT_SECRET`) |
+| `BUERO_DESKTOP_DIR` | `/app/desktop` (Docker) | Installationsdateien des Desktop-Clients, werden unter `/desktop/` zum Herunterladen angeboten |
 | `BUERO_TUPFER_DIR` | `/app/tupfer` (Docker) | Web-Version des Tupfer Designers, wird unter `/tupfer/` ausgeliefert. Fehlt sie, gibt es kein „Bearbeiten“ für `.tupfer` |
 
 ### Euro-Office anbinden
@@ -202,12 +204,54 @@ aufgebaut.
 
 ## Desktop-Client
 
-Installationsdateien für Windows (`.msi`/`.exe`), macOS (`.dmg`) und Linux
-(`.deb`, `.AppImage`) baut GitHub Actions beim Pushen eines Tags `v*`
-(`.github/workflows/desktop.yml`) als Release-Entwurf.
+Installationsdateien für Windows (`.msi`/`.exe`) und Linux (`.deb`, `.rpm`,
+`.AppImage`) baut GitHub Actions beim Pushen eines Tags `v*`
+(`.github/workflows/release.yml`) als Release-Entwurf.
+
+**Download über die Weboberfläche:** Das Docker-Image enthält die
+Installationsdateien derselben Version. Die Webseite bietet sie unter
+*Einstellungen → Desktop-App* an (passend zum eigenen System hervorgehoben)
+und auf der Anmeldeseite als Link. Ohne Docker die Dateien in den Ordner
+`BUERO_DESKTOP_DIR` (Standard `./desktop-dist`) legen; ist er leer, verweist
+die Webseite auf die GitHub-Releases.
 
 Beim ersten Start fragt der Client nach der Server-Adresse
 (z. B. `https://buero.deine-domain.de`), danach nach dem Passwort.
+
+### Sammlungen als Laufwerk
+
+Unter *Einstellungen → Laufwerk* bindet der Desktop-Client die Sammlungen als
+Ordner ins System ein – unter Linux standardmäßig nach `~/Büro`, unter Windows
+als Laufwerk `B:` (oder der nächste freie Buchstabe). Danach wird es bei jedem
+Start automatisch eingebunden, bis man es wieder aushängt.
+
+- Jede Sammlung ist ein Ordner, Untersammlungen sind Unterordner. Dokumente ohne
+  Sammlung liegen im Ordner `Eingang`. Liegt ein Dokument in mehreren
+  Sammlungen, erscheint es in jedem dieser Ordner.
+- Dateinamen sind der Titel plus die Endung der Originaldatei. Dateien werden
+  erst beim Öffnen geladen und zwischengespeichert.
+- **Ändern** einer Datei legt beim Schließen eine neue Version an. Hat jemand
+  anderes inzwischen gespeichert, landet die eigene Fassung als
+  „… (Konflikt)“ daneben.
+- **Hineinkopieren** lädt in die Sammlung des Ordners hoch (Wurzel und
+  `Eingang`: ohne Sammlung).
+- **Umbenennen** ändert den Titel, **Verschieben** wechselt die Sammlung.
+  Ordner anlegen, umbenennen, verschieben und (leer) löschen wirkt auf die
+  Sammlungen.
+- **Löschen** nimmt ein Dokument nur aus der Sammlung. Nur im Ordner `Eingang`
+  wird es endgültig gelöscht.
+- Temporäre Dateien (Sperrdateien wie `~$…` oder `.~lock…`, `*.tmp`, versteckte
+  Dateien) bleiben lokal und werden nicht hochgeladen. Damit klappt das
+  Speichern aus Word, Excel, LibreOffice & Co. direkt im Laufwerk.
+- Änderungen am Server (z. B. über die Weboberfläche) erscheinen nach wenigen
+  Sekunden.
+
+Voraussetzungen:
+
+- **Linux:** FUSE 3 (Paket `fuse3`, bei den gängigen Distributionen
+  vorinstalliert).
+- **Windows:** [WinFsp](https://winfsp.dev/rel/) einmalig installieren. Fehlt
+  es, zeigt Büro in den Einstellungen einen Link zum Herunterladen.
 
 Lokal bauen:
 
@@ -237,23 +281,27 @@ cd crates/web && trunk serve
 # Desktop-Client im Entwicklungsmodus (startet trunk serve selbst)
 cd crates/desktop && cargo tauri dev
 
+# Laufwerk ohne Desktop-Client testen (Linux; „-“ = ohne Passwort)
+cargo run -p buero-vfs --example mount -- http://localhost:8080 - /tmp/buero-mnt
+
 # Tests
 cargo test
 ```
 
 ## HTTP-API
 
-Alle Endpunkte (außer Anmeldung/Status) erwarten `Authorization: Bearer <token>`
+Alle Endpunkte (außer Anmeldung/Status und Desktop-Download) erwarten `Authorization: Bearer <token>`
 (oder `?token=` für Datei-Links).
 
 | Methode | Pfad | Zweck |
 |---|---|---|
 | `POST` | `/api/auth/login` | `{"password": "…"}` → `{"token": "…"}` |
 | `GET` | `/api/auth/status` | Anmeldung nötig / gültig? |
+| `GET` | `/api/desktop` · `/desktop/{datei}` | Angebotene Installationsdateien des Desktop-Clients · Download (ohne Anmeldung) |
 | `GET` | `/api/documents?q=&collections=&tags=&kind=&unfiled=&sort=&offset=&limit=` | Suche & Liste |
 | `POST` | `/api/documents` | Upload (multipart: `file` beliebig oft, optional `collection_ids`, `tag_ids`, `title`, `document_date`) |
 | `GET/PATCH/DELETE` | `/api/documents/{id}` | Details / ändern (Titel, Notiz, Datum, Sammlungen, Tags) / löschen |
-| `GET` | `/api/documents/{id}/file[?download=1&version=N]` | Datei (unterstützt Range-Requests) |
+| `GET` | `/api/documents/{id}/file[?download=true&version=N]` | Datei (unterstützt Range-Requests) |
 | `GET` | `/api/documents/{id}/thumbnail` · `/text` | Vorschaubild · erkannter Text |
 | `POST` | `/api/documents/{id}/versions` | Neue Version hochladen |
 | `POST` | `/api/documents/{id}/reprocess` | Texterkennung wiederholen |

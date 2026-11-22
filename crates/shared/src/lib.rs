@@ -300,6 +300,14 @@ pub struct Features {
     pub tupfer: bool,
 }
 
+/// Installationsdatei des Desktop-Clients, die der Server zum Herunterladen anbietet
+/// (unter `/desktop/{name}`)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DesktopDownload {
+    pub name: String,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OfficeConfig {
     /// Adresse von `api.js` des Document Servers

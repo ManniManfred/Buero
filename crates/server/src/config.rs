@@ -23,6 +23,8 @@ pub struct Config {
     pub office_jwt_secret: Option<String>,
     /// Web-Version des Tupfer Designers (Bearbeiten von `.tupfer`-Projekten), wird unter `/tupfer/` ausgeliefert
     pub tupfer_dir: PathBuf,
+    /// Installationsdateien des Desktop-Clients, werden unter `/desktop/` zum Herunterladen angeboten
+    pub desktop_dir: PathBuf,
 }
 
 fn env(key: &str) -> Option<String> {
@@ -56,6 +58,7 @@ impl Config {
             office_url: env("BUERO_OFFICE_URL").map(|u| u.trim_end_matches('/').to_string()),
             office_jwt_secret: env("BUERO_OFFICE_JWT_SECRET"),
             tupfer_dir: env("BUERO_TUPFER_DIR").unwrap_or_else(|| "./tupfer".into()).into(),
+            desktop_dir: env("BUERO_DESKTOP_DIR").unwrap_or_else(|| "./desktop-dist".into()).into(),
         }
     }
 }

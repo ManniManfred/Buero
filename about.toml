@@ -16,6 +16,10 @@ accepted = [
     "CC0-1.0",
     "0BSD",
     "MIT-0",
+    # webpki-roots (Stammzertifikate für TLS im Desktop-Client)
+    "CDLA-Permissive-2.0",
+    # winfsp-Bindings (Windows-Laufwerk); mit der AGPL-3.0 vereinbar (§ 13)
+    "GPL-3.0",
 ]
 # Eigene Crates (AGPL) nicht auflisten
 private = { ignore = true }

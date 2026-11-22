@@ -29,6 +29,13 @@ pub fn Settings() -> impl IntoView {
                     }>"Speichern & neu verbinden"</button>
                     <hr />
                 </Show>
+                <Show when=is_desktop>
+                    <crate::components::drive::DriveSection />
+                </Show>
+                <Show when=|| !is_desktop()>
+                    <crate::components::desktop::DesktopSection />
+                    <hr />
+                </Show>
                 <h3>"Freigaben"</h3>
                 <p class="muted small">"Links zu Dokumenten und Sammlungen, die ohne Anmeldung erreichbar sind."</p>
                 <button on:click=move |_| {
@@ -80,6 +87,9 @@ pub fn Settings() -> impl IntoView {
                     <button on:click=move |_| {
                         spawn_local(async move {
                             let _ = c.api.send_empty::<()>("POST", "/api/auth/logout", None).await;
+                            if is_desktop() {
+                                crate::components::drive::sync(c.api, false);
+                            }
                             c.api.set_token(None);
                             let _ = window().location().reload();
                         });

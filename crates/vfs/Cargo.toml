@@ -1,0 +1,36 @@
+[package]
+name = "buero-vfs"
+version.workspace = true
+edition.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Büro – Sammlungen als virtuelles Laufwerk (FUSE / WinFsp)"
+
+[dependencies]
+shared.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "3", default-features = false, features = ["json", "multipart", "gzip"] }
+log = "0.4"
+
+[target.'cfg(not(windows))'.dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[target.'cfg(windows)'.dependencies.ureq]
+version = "3"
+default-features = false
+features = ["native-tls"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "0.19", default-features = false }
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winfsp = { version = "0.13", default-features = false, features = ["delayload"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Authorization"] }
+
+[features]
+# Nur zum Prüfen des Windows-Codes unter Linux (cargo check --target x86_64-pc-windows-msvc)
+check-windows = ["winfsp/docsrs"]

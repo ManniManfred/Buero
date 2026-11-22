@@ -5,3 +5,5 @@ crates/desktop/gen
 **/*.rs.bk
 .DS_Store
 /tupfer
+/desktop-dist/*
+!/desktop-dist/README.md

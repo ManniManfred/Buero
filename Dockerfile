@@ -27,7 +27,7 @@ RUN mkdir -p crates/shared/src crates/server/src crates/web/src \
  && echo "" > crates/shared/src/lib.rs \
  && echo "fn main(){}" > crates/server/src/main.rs \
  && echo "fn main(){}" > crates/web/src/main.rs \
- && sed -i 's#, "crates/desktop"##' Cargo.toml \
+ && sed -i 's#, "crates/desktop", "crates/vfs"##' Cargo.toml \
  && cargo build --release -p buero-server \
  && cargo build --release -p web --target wasm32-unknown-unknown \
  && rm -rf crates/*/src
@@ -74,10 +74,13 @@ RUN apt-get update \
 COPY --from=builder /src/target/release/buero-server /usr/local/bin/buero-server
 COPY --from=builder /src/crates/web/dist /app/web
 COPY --from=tupfer /tupfer /app/tupfer
+# Installationsdateien des Desktop-Clients (vom Release-Workflow abgelegt, lokal meist leer)
+COPY desktop-dist/ /app/desktop/
 
 ENV BUERO_DATA_DIR=/data \
     BUERO_WEB_DIR=/app/web \
     BUERO_TUPFER_DIR=/app/tupfer \
+    BUERO_DESKTOP_DIR=/app/desktop \
     PORT=80 \
     RUST_LOG=info
 

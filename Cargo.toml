@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/shared", "crates/server", "crates/web", "crates/desktop"]
+members = ["crates/shared", "crates/server", "crates/web", "crates/desktop", "crates/vfs"]
 # Standard-Build (cargo build) baut nur den Server; Web (wasm) wird mit trunk,
 # Desktop mit tauri gebaut.
 default-members = ["crates/server"]

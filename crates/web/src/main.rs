@@ -52,6 +52,9 @@ fn App() -> impl IntoView {
                 Ok(s) if s.authenticated => {
                     c.api.unauthorized.set(false);
                     phase.set(Phase::Ready);
+                    if api::is_desktop() {
+                        components::drive::sync(c.api, true);
+                    }
                 }
                 Ok(_) => phase.set(Phase::Login),
                 Err(e) => {
@@ -67,6 +70,9 @@ fn App() -> impl IntoView {
     Effect::new(move |_| {
         if c.api.unauthorized.get() && phase.get_untracked() == Phase::Ready {
             c.api.set_token(None);
+            if api::is_desktop() {
+                components::drive::sync(c.api, false);
+            }
             phase.set(Phase::Login);
         }
     });
@@ -147,7 +153,7 @@ fn Login(on_done: Callback<()>) -> impl IntoView {
         });
     };
     view! {
-        <div class="center">
+        <div class="center login-page">
             <form class="card login" on:submit=submit>
                 <h1 class="brand-name"><Icon name="logo" class="brand-logo" />"Büro"</h1>
                 <input type="password" placeholder="Passwort" autofocus
@@ -160,6 +166,9 @@ fn Login(on_done: Callback<()>) -> impl IntoView {
                     </button>
                 </Show>
             </form>
+            <Show when=|| !api::is_desktop()>
+                <crate::components::desktop::DesktopLoginLink />
+            </Show>
         </div>
     }
 }
