@@ -367,6 +367,7 @@ pub async fn public_upload(
     // Empfänger bestimmen nur die Dateien – Ziel ist immer die freigegebene Sammlung
     form.collections = vec![collection];
     form.tags.clear();
+    form.tag_names.clear();
     form.title = None;
     form.date = None;
     form.link_duplicates = false;

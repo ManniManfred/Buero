@@ -61,7 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/file-key", get(auth::file_key))
         .route("/api/admin/backup-link", post(auth::backup_link))
         .route("/api/mcp/tokens", get(mcp::list_tokens).post(mcp::create_token))
-        .route("/api/mcp/tokens/{id}", axum::routing::delete(mcp::delete_token))
+        .route("/api/mcp/tokens/{id}", axum::routing::patch(mcp::update_token).delete(mcp::delete_token))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::require_auth));
 
     let public = Router::new()
@@ -72,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/desktop/update", get(desktop::update))
         // KI-Zugang, geprüft über eigene Zugangsschlüssel (api_tokens)
         .route("/mcp", get(mcp::get_mcp).post(mcp::post_mcp))
+        .route("/mcp/upload", post(mcp::upload_multipart))
         // Freigabelinks (Zugriff ohne Anmeldung, geprüft über Token/Passwort)
         .route("/api/public/shares/{token}", get(shares::public_get))
         .route("/api/public/shares/{token}/unlock", post(shares::public_unlock))

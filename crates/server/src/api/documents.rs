@@ -105,6 +105,8 @@ pub(crate) struct UploadForm {
     pub uploads: Vec<Upload>,
     pub collections: Vec<i64>,
     pub tags: Vec<i64>,
+    /// Tags per Name (nur für den KI-Zugang, der sie bei Bedarf anlegt)
+    pub tag_names: Vec<String>,
     pub title: Option<String>,
     pub date: Option<String>,
     /// Bereits vorhandene Dokumente (gleicher Inhalt) trotzdem den Sammlungen
@@ -114,7 +116,8 @@ pub(crate) struct UploadForm {
 }
 
 /// Multipart-Formular lesen: beliebig viele Felder `file`, optional
-/// `collection_ids`, `tag_ids` (kommagetrennt), `title` und `document_date`.
+/// `collection_ids`, `tag_ids` (kommagetrennt), `tags` (Namen, kommagetrennt),
+/// `title` und `document_date`.
 /// `max_bytes`: Höchstgröße pro Datei.
 pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_bytes: usize) -> AppResult<UploadForm> {
     let mut f = UploadForm { link_duplicates: true, ..Default::default() };
@@ -137,6 +140,9 @@ pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_byte
                 }
                 "collection_ids" => f.collections = parse_ids(&field.text().await?),
                 "tag_ids" => f.tags = parse_ids(&field.text().await?),
+                "tags" => {
+                    f.tag_names.extend(field.text().await?.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()))
+                }
                 "title" => f.title = Some(field.text().await?).filter(|t| !t.trim().is_empty()),
                 "document_date" => {
                     f.date = Some(field.text().await?).filter(|d| util::valid_date(d))
@@ -166,7 +172,7 @@ pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<
 
 /// Gestagte Dateien als Dokumente anlegen (Duplikate werden erkannt).
 pub(crate) async fn store_uploads(st: &AppState, form: UploadForm) -> AppResult<Vec<UploadResult>> {
-    let UploadForm { uploads, collections, tags, title, date, link_duplicates } = form;
+    let UploadForm { uploads, collections, tags, title, date, link_duplicates, .. } = form;
     let single = uploads.len() == 1;
     let mut results = Vec::with_capacity(uploads.len());
     let mut touched = Vec::new();

@@ -453,11 +453,22 @@ pub struct ApiToken {
     pub name: String,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
+    /// Darf zusätzlich Dokumente hochladen und taggen
+    #[serde(default)]
+    pub can_upload: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ApiTokenInput {
     pub name: String,
+    #[serde(default)]
+    pub can_upload: bool,
+}
+
+/// Berechtigung eines bestehenden Zugangsschlüssels ändern
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApiTokenUpdate {
+    pub can_upload: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

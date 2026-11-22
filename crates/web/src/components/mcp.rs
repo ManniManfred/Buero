@@ -5,7 +5,7 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use shared::{ApiToken, ApiTokenCreated, ApiTokenInput};
+use shared::{ApiToken, ApiTokenCreated, ApiTokenInput, ApiTokenUpdate};
 
 use crate::state::ctx;
 use crate::util::format_ts;
@@ -42,8 +42,11 @@ pub fn McpSection() -> impl IntoView {
         else {
             return;
         };
+        let can_upload = window()
+            .confirm_with_message("Darf dieser Zugang auch Dokumente hochladen und Tags vergeben?\n(Löschen oder Ändern geht nie.) OK = ja, Abbrechen = nur lesen")
+            .unwrap_or(false);
         spawn_local(async move {
-            match c.api.send::<_, ApiTokenCreated>("POST", "/api/mcp/tokens", &ApiTokenInput { name }).await {
+            match c.api.send::<_, ApiTokenCreated>("POST", "/api/mcp/tokens", &ApiTokenInput { name, can_upload }).await {
                 Ok(t) => {
                     created.set(Some(t));
                     load();
@@ -73,6 +76,19 @@ pub fn McpSection() -> impl IntoView {
         });
     };
 
+    let set_upload = move |t: ApiToken, can_upload: bool| {
+        spawn_local(async move {
+            let body = ApiTokenUpdate { can_upload };
+            match c.api.send_empty("PATCH", &format!("/api/mcp/tokens/{}", t.id), Some(&body)).await {
+                Ok(()) => load(),
+                Err(e) => {
+                    c.notify(e, true);
+                    load();
+                }
+            }
+        });
+    };
+
     let command = move |token: &str| {
         format!("claude mcp add --transport http buero {} --header \"Authorization: Bearer {token}\"", endpoint())
     };
@@ -81,7 +97,8 @@ pub fn McpSection() -> impl IntoView {
         <h3>"KI-Zugang (MCP)"</h3>
         <p class="muted small">
             "KI-Assistenten wie Claude können über "<code>{endpoint}</code>" Dokumente suchen und den erkannten Text lesen – "
-            "nur lesend, nur mit einem Zugangsschlüssel von hier. Gelesene Inhalte gehen an den Anbieter des Assistenten. "
+            "nur mit einem Zugangsschlüssel von hier, normalerweise nur lesend. Schlüssel mit „Hochladen“ dürfen zusätzlich "
+            "Dokumente hochladen und Tags vergeben, aber nie löschen oder ändern. Gelesene Inhalte gehen an den Anbieter des Assistenten. "
             "Sammlungen lassen sich über „Bearbeiten“ sperren; ihre Dokumente (samt Untersammlungen) liefert der Zugang nie aus."
         </p>
         <p class="small">
@@ -112,10 +129,17 @@ pub fn McpSection() -> impl IntoView {
             })}
         </Show>
         <ul class="token-list small">
-            <For each=move || tokens.get() key=|t| t.id let:t>
+            <For each=move || tokens.get() key=|t| (t.id, t.can_upload) let:t>
                 <li>
                     <crate::icons::Icon name="lock" class="sm" />
                     <span class="grow">{t.name.clone()}</span>
+                    <label class="muted" title="Darf Dokumente hochladen und Tags vergeben">
+                        <input type="checkbox" prop:checked=t.can_upload on:change={
+                            let t = t.clone();
+                            move |ev| set_upload(t.clone(), event_target_checked(&ev))
+                        } />
+                        "Hochladen"
+                    </label>
                     <span class="muted">
                         {match t.last_used_at {
                             Some(ts) => format!("zuletzt {}", format_ts(ts)),

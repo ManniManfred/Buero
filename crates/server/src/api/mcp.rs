@@ -6,21 +6,24 @@
 //! - Zugang nur mit eigenem Zugangsschlüssel (`api_tokens`), unabhängig vom
 //!   Büro-Passwort; Sitzungen der Oberfläche gelten hier nicht und die
 //!   Schlüssel gelten nirgends sonst.
-//! - Nur lesend.
+//! - Nur lesend – außer der Schlüssel darf ausdrücklich hochladen
+//!   (`can_upload`): dann zusätzlich Dokumente hochladen (`upload_document`,
+//!   `POST /mcp/upload`) und Tags vergeben (`add_tags`). Löschen oder Ändern
+//!   bestehender Dokumente geht nie.
 //! - Dokumente aus gesperrten Sammlungen (samt Untersammlungen) werden nie
 //!   ausgeliefert, auch nicht als Suchtreffer; gesperrte Sammlungen selbst
 //!   tauchen nicht auf.
 
 use std::collections::HashSet;
 
-use axum::extract::{Path, Request, State};
+use axum::extract::{Multipart, Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use rand::RngCore;
 use serde_json::{json, Value};
 
-use shared::{ApiToken, ApiTokenCreated, ApiTokenInput};
+use shared::{ApiToken, ApiTokenCreated, ApiTokenInput, ApiTokenUpdate};
 
 use crate::auth::{hash_token, token_from_request};
 use crate::db;
@@ -37,15 +40,32 @@ const TOKEN_PREFIX: &str = "bmcp_";
 // ---------------------------------------------------------------------------
 
 pub async fn list_tokens(State(st): State<AppState>) -> AppResult<Json<Vec<ApiToken>>> {
-    let rows: Vec<(i64, String, i64, Option<i64>)> =
-        sqlx::query_as("SELECT id, name, created_at, last_used_at FROM api_tokens ORDER BY id")
+    let rows: Vec<(i64, String, i64, Option<i64>, bool)> =
+        sqlx::query_as("SELECT id, name, created_at, last_used_at, can_upload <> 0 FROM api_tokens ORDER BY id")
             .fetch_all(&st.pool)
             .await?;
     Ok(Json(
         rows.into_iter()
-            .map(|(id, name, created_at, last_used_at)| ApiToken { id, name, created_at, last_used_at })
+            .map(|(id, name, created_at, last_used_at, can_upload)| ApiToken { id, name, created_at, last_used_at, can_upload })
             .collect(),
     ))
+}
+
+pub async fn update_token(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(i): Json<ApiTokenUpdate>,
+) -> AppResult<StatusCode> {
+    let n = sqlx::query("UPDATE api_tokens SET can_upload = ? WHERE id = ?")
+        .bind(i.can_upload)
+        .bind(id)
+        .execute(&st.pool)
+        .await?
+        .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found());
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn create_token(
@@ -59,15 +79,16 @@ pub async fn create_token(
     let token = format!("{TOKEN_PREFIX}{}", hex::encode(bytes));
     let ts = now();
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO api_tokens (name, token_hash, created_at) VALUES (?, ?, ?) RETURNING id",
+        "INSERT INTO api_tokens (name, token_hash, created_at, can_upload) VALUES (?, ?, ?, ?) RETURNING id",
     )
     .bind(&name)
     .bind(hash_token(&token))
     .bind(ts)
+    .bind(i.can_upload)
     .fetch_one(&st.pool)
     .await?;
     Ok(Json(ApiTokenCreated {
-        info: ApiToken { id, name, created_at: ts, last_used_at: None },
+        info: ApiToken { id, name, created_at: ts, last_used_at: None, can_upload: i.can_upload },
         token,
     }))
 }
@@ -86,18 +107,30 @@ fn bearer(req: &Request) -> Option<String> {
     token_from_request(req).filter(|t| has_header && t.starts_with(TOKEN_PREFIX))
 }
 
-async fn check_token(st: &AppState, token: Option<String>) -> AppResult<()> {
+/// Was ein gültiger Schlüssel darf
+#[derive(Clone, Copy)]
+struct Perm {
+    can_upload: bool,
+}
+
+async fn check_token(st: &AppState, token: Option<String>) -> AppResult<Perm> {
     let token = token.ok_or_else(AppError::unauthorized)?;
-    let id: Option<i64> = sqlx::query_scalar("SELECT id FROM api_tokens WHERE token_hash = ?")
+    let row: Option<(i64, bool)> = sqlx::query_as("SELECT id, can_upload <> 0 FROM api_tokens WHERE token_hash = ?")
         .bind(hash_token(&token))
         .fetch_optional(&st.pool)
         .await?;
-    let Some(id) = id else {
+    let Some((id, can_upload)) = row else {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         return Err(AppError::unauthorized());
     };
     sqlx::query("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").bind(now()).bind(id).execute(&st.pool).await?;
-    Ok(())
+    Ok(Perm { can_upload })
+}
+
+fn unauthorized(e: AppError) -> Response {
+    let mut r = e.into_response();
+    r.headers_mut().insert("WWW-Authenticate", axum::http::HeaderValue::from_static("Bearer"));
+    r
 }
 
 // ---------------------------------------------------------------------------
@@ -142,12 +175,13 @@ pub async fn get_mcp() -> StatusCode {
 
 pub async fn post_mcp(State(st): State<AppState>, req: Request) -> Response {
     let token = bearer(&req);
-    if let Err(e) = check_token(&st, token).await {
-        let mut r = e.into_response();
-        r.headers_mut().insert("WWW-Authenticate", axum::http::HeaderValue::from_static("Bearer"));
-        return r;
-    }
-    let body = match axum::body::to_bytes(req.into_body(), 1024 * 1024).await {
+    let perm = match check_token(&st, token).await {
+        Ok(p) => p,
+        Err(e) => return unauthorized(e),
+    };
+    // Mit Upload-Recht passen Dateien (Base64) in die Anfrage
+    let limit = if perm.can_upload { MAX_RPC_UPLOAD } else { 1024 * 1024 };
+    let body = match axum::body::to_bytes(req.into_body(), limit).await {
         Ok(b) => b,
         Err(_) => return rpc_error(Value::Null, -32700, "Anfrage zu groß oder unlesbar").into_response(),
     };
@@ -158,13 +192,13 @@ pub async fn post_mcp(State(st): State<AppState>, req: Request) -> Response {
     if let Value::Array(batch) = msg {
         let mut out = Vec::new();
         for m in batch {
-            if let Some(r) = handle(&st, m).await {
+            if let Some(r) = handle(&st, m, perm).await {
                 out.push(r);
             }
         }
         return if out.is_empty() { StatusCode::ACCEPTED.into_response() } else { Json(Value::Array(out)).into_response() };
     }
-    match handle(&st, msg).await {
+    match handle(&st, msg, perm).await {
         Some(r) => Json(r).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -175,7 +209,7 @@ fn rpc_error(id: Value, code: i64, msg: &str) -> Json<Value> {
 }
 
 /// Eine Nachricht verarbeiten; `None` für Benachrichtigungen und Antworten.
-async fn handle(st: &AppState, msg: Value) -> Option<Value> {
+async fn handle(st: &AppState, msg: Value, perm: Perm) -> Option<Value> {
     let method = msg.get("method").and_then(Value::as_str)?.to_string();
     let id = msg.get("id").cloned()?;
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
@@ -187,18 +221,15 @@ async fn handle(st: &AppState, msg: Value) -> Option<Value> {
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "buero", "title": "Büro", "version": super::desktop::server_version() },
-                "instructions": "Zugriff auf die persönliche Dokumentenverwaltung Büro (nur lesend). \
-                    Mit search_documents suchen (Treffer enthalten kurze Ausschnitte), mit get_document \
-                    den erkannten Text eines Dokuments lesen. Den Volltext nur abrufen, wenn er für die \
-                    Frage nötig ist. Manche Sammlungen sind für diesen Zugang gesperrt und unsichtbar."
+                "instructions": instructions(perm)
             }))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_defs() })),
+        "tools/list" => Ok(json!({ "tools": tool_defs(perm) })),
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            Ok(match call_tool(st, name, &args).await {
+            Ok(match call_tool(st, name, &args, perm).await {
                 Ok(text) => json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
                 Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
             })
@@ -211,9 +242,28 @@ async fn handle(st: &AppState, msg: Value) -> Option<Value> {
     })
 }
 
-fn tool_defs() -> Value {
+fn instructions(perm: Perm) -> String {
+    let mut s = String::from(
+        "Zugriff auf die persönliche Dokumentenverwaltung Büro. \
+         Mit search_documents suchen (Treffer enthalten kurze Ausschnitte), mit get_document \
+         den erkannten Text eines Dokuments lesen. Den Volltext nur abrufen, wenn er für die \
+         Frage nötig ist. Manche Sammlungen sind für diesen Zugang gesperrt und unsichtbar.",
+    );
+    if perm.can_upload {
+        s.push_str(
+            " Dieser Zugang darf außerdem Dokumente hochladen (upload_document, Datei als Base64; \
+             größere Dateien per multipart an POST /mcp/upload mit demselben Schlüssel) und \
+             Tags vergeben (add_tags). Löschen oder Ändern geht nicht.",
+        );
+    } else {
+        s.push_str(" Der Zugang ist nur lesend.");
+    }
+    s
+}
+
+fn tool_defs(perm: Perm) -> Value {
     let ro = json!({ "readOnlyHint": true, "openWorldHint": false });
-    json!([
+    let mut tools = json!([
         {
             "name": "search_documents",
             "title": "Dokumente suchen",
@@ -268,12 +318,58 @@ fn tool_defs() -> Value {
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": ro
         }
-    ])
+    ]);
+    if perm.can_upload {
+        let w = json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false });
+        let tags = json!({ "type": "array", "items": { "type": "string" },
+                           "description": "Tag-Namen; fehlende Tags werden angelegt" });
+        let arr = tools.as_array_mut().expect("Liste");
+        arr.push(json!({
+            "name": "upload_document",
+            "title": "Dokument hochladen",
+            "description": "Datei als neues Dokument hochladen (Inhalt Base64-kodiert, max. ca. 24 MB). \
+                Gleiche Dateien werden erkannt und nicht doppelt gespeichert; Tags und Sammlung werden \
+                dann am vorhandenen Dokument ergänzt. Texterkennung läuft danach im Hintergrund.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "filename": { "type": "string", "description": "Dateiname mit Endung" },
+                    "content_base64": { "type": "string" },
+                    "title": { "type": "string", "description": "Sonst aus dem Dateinamen" },
+                    "document_date": { "type": "string", "description": "JJJJ-MM-TT" },
+                    "tags": tags.clone(),
+                    "collection_id": { "type": "integer" }
+                },
+                "required": ["filename", "content_base64"]
+            },
+            "annotations": w.clone()
+        }));
+        arr.push(json!({
+            "name": "add_tags",
+            "title": "Tags vergeben",
+            "description": "Tags zu Dokumenten hinzufügen (vorhandene Tags bleiben).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "document_ids": { "type": "array", "items": { "type": "integer" } },
+                    "tags": tags
+                },
+                "required": ["document_ids", "tags"]
+            },
+            "annotations": w
+        }));
+    }
+    tools
 }
 
-async fn call_tool(st: &AppState, name: &str, args: &Value) -> Result<String, String> {
+async fn call_tool(st: &AppState, name: &str, args: &Value, perm: Perm) -> Result<String, String> {
     let lock = Lock::load(st).await.map_err(|e| e.message)?;
     let r = match name {
+        "upload_document" | "add_tags" if !perm.can_upload => {
+            return Err("Dieser Zugangsschlüssel darf nicht hochladen".into())
+        }
+        "upload_document" => upload_document(st, &lock, args).await,
+        "add_tags" => add_tags(st, &lock, args).await,
         "search_documents" => search(st, &lock, args).await,
         "get_document" => get_document(st, &lock, args).await,
         "list_collections" => list_collections(st, &lock).await,
@@ -487,4 +583,197 @@ async fn list_tags(st: &AppState) -> Result<Value, String> {
         .await
         .map_err(err)?;
     Ok(Value::Array(rows.into_iter().map(|(id, name)| json!({ "id": id, "name": name })).collect()))
+}
+
+// ---------------------------------------------------------------------------
+// Schreiben (nur mit `can_upload`)
+// ---------------------------------------------------------------------------
+
+/// Größte JSON-RPC-Anfrage mit Upload-Recht (Base64 braucht 4/3 der Dateigröße)
+const MAX_RPC_UPLOAD: usize = 32 * 1024 * 1024;
+
+/// Tags per Name finden oder anlegen
+async fn resolve_tags(st: &AppState, names: &[String]) -> Result<Vec<i64>, String> {
+    let mut ids = Vec::new();
+    for n in names.iter().take(50) {
+        let name: String = n.trim().chars().take(100).collect();
+        if name.is_empty() {
+            continue;
+        }
+        sqlx::query("INSERT OR IGNORE INTO tags (name) VALUES (?)").bind(&name).execute(&st.pool).await.map_err(err)?;
+        let id: i64 = sqlx::query_scalar("SELECT id FROM tags WHERE name = ? COLLATE NOCASE")
+            .bind(&name)
+            .fetch_one(&st.pool)
+            .await
+            .map_err(err)?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+fn string_list(args: &Value, key: &str) -> Vec<String> {
+    match args.get(key) {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        Some(Value::String(s)) => s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Hochgeladene (gestagte) Dateien speichern. Sammlungen müssen frei sein;
+/// Duplikate von Dokumenten in gesperrten Sammlungen werden nicht angefasst
+/// und nicht beschrieben.
+async fn store(st: &AppState, lock: &Lock, mut form: super::documents::UploadForm) -> Result<Vec<Value>, String> {
+    let discard_all = |st: AppState, ups: Vec<super::documents::Upload>| async move {
+        for u in &ups {
+            st.storage.discard(&u.staged).await;
+        }
+    };
+    if form.collections.iter().any(|c| lock.all.contains(c)) {
+        discard_all(st.clone(), std::mem::take(&mut form.uploads)).await;
+        return Err("Sammlung nicht gefunden".into());
+    }
+    let names = std::mem::take(&mut form.tag_names);
+    form.tags = match resolve_tags(st, &names).await {
+        Ok(t) => t,
+        Err(e) => {
+            discard_all(st.clone(), std::mem::take(&mut form.uploads)).await;
+            return Err(e);
+        }
+    };
+    form.link_duplicates = true;
+
+    let mut skipped = Vec::new();
+    let mut keep = Vec::new();
+    for u in std::mem::take(&mut form.uploads) {
+        let existing: Option<i64> =
+            sqlx::query_scalar("SELECT document_id FROM document_versions WHERE sha256 = ? ORDER BY id LIMIT 1")
+                .bind(&u.staged.sha256)
+                .fetch_optional(&st.pool)
+                .await
+                .map_err(err)?;
+        let blocked = match existing {
+            Some(id) => db::summary(&st.pool, id).await.map_err(err)?.is_some_and(|d| lock.blocks(&d.collection_ids)),
+            None => false,
+        };
+        if blocked {
+            st.storage.discard(&u.staged).await;
+            skipped.push(json!({ "filename": u.filename, "skipped": true,
+                                 "reason": "Gleiche Datei liegt bereits in einer gesperrten Sammlung" }));
+        } else {
+            keep.push(u);
+        }
+    }
+    form.uploads = keep;
+    let mut out = Vec::new();
+    if !form.uploads.is_empty() {
+        let tags = tag_names(st).await?;
+        for r in super::documents::store_uploads(st, form).await.map_err(|e| e.message)? {
+            let d = r.document;
+            out.push(json!({
+                "id": d.id,
+                "title": d.title,
+                "filename": d.original_filename,
+                "duplicate": r.duplicate,
+                "tags": d.tag_ids.iter().filter_map(|t| tags.get(t)).collect::<Vec<_>>(),
+            }));
+        }
+    }
+    out.extend(skipped);
+    Ok(out)
+}
+
+async fn upload_document(st: &AppState, lock: &Lock, args: &Value) -> Result<Value, String> {
+    use base64::Engine;
+    let filename = super::documents::sanitize_filename(&string(args, "filename"));
+    let data = string(args, "content_base64");
+    let data: String = data.split_once(";base64,").map(|(_, d)| d).unwrap_or(&data).chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|_| "content_base64 ist kein gültiges Base64".to_string())?;
+    if bytes.is_empty() {
+        return Err("Datei ist leer".into());
+    }
+    let stream = futures_util::stream::once(async move { Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(bytes)) });
+    let staged = st.storage.stage(Box::pin(stream), st.config.max_upload_bytes).await.map_err(|e| e.to_string())?;
+    let mime = super::documents::guess_mime(&filename, None);
+    let date = Some(string(args, "document_date")).filter(|d| crate::util::valid_date(d));
+    let title = Some(string(args, "title")).filter(|t| !t.trim().is_empty());
+    let form = super::documents::UploadForm {
+        uploads: vec![super::documents::Upload { staged, filename, mime }],
+        collections: int(args, "collection_id").into_iter().collect(),
+        tag_names: string_list(args, "tags"),
+        title,
+        date,
+        ..Default::default()
+    };
+    let mut r = store(st, lock, form).await?;
+    Ok(r.pop().unwrap_or(Value::Null))
+}
+
+async fn add_tags(st: &AppState, lock: &Lock, args: &Value) -> Result<Value, String> {
+    let ids: Vec<i64> = match args.get("document_ids") {
+        Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_i64()).collect(),
+        _ => Vec::new(),
+    };
+    if ids.is_empty() {
+        return Err("Parameter document_ids fehlt".into());
+    }
+    let names = string_list(args, "tags");
+    // Nur sichtbare Dokumente; Unbekannte und Gesperrte gleich behandeln
+    let docs: Vec<i64> = db::summaries(&st.pool, &ids)
+        .await
+        .map_err(err)?
+        .into_iter()
+        .filter(|d| !lock.blocks(&d.collection_ids))
+        .map(|d| d.id)
+        .collect();
+    let missing: Vec<i64> = ids.iter().copied().filter(|i| !docs.contains(i)).collect();
+    if !missing.is_empty() {
+        return Err(format!("Dokument(e) nicht gefunden: {missing:?}"));
+    }
+    let tag_ids = resolve_tags(st, &names).await?;
+    if tag_ids.is_empty() {
+        return Err("Parameter tags fehlt".into());
+    }
+    for d in &docs {
+        for t in &tag_ids {
+            sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)")
+                .bind(d)
+                .bind(t)
+                .execute(&st.pool)
+                .await
+                .map_err(err)?;
+        }
+    }
+    st.reindex(&docs).await.map_err(err)?;
+    Ok(json!({ "documents": docs.len(), "tags": names }))
+}
+
+/// `POST /mcp/upload`: Dateien per multipart hochladen (Felder wie bei
+/// `/api/documents`: `file` (mehrfach), `tags` als Namen, `collection_ids`,
+/// `title`, `document_date`). Nur mit Upload-Recht.
+pub async fn upload_multipart(State(st): State<AppState>, req: Request) -> Response {
+    match check_token(&st, bearer(&req)).await {
+        Ok(p) if p.can_upload => {}
+        Ok(_) => return AppError::new(StatusCode::FORBIDDEN, "Dieser Zugangsschlüssel darf nicht hochladen").into_response(),
+        Err(e) => return unauthorized(e),
+    }
+    let mut mp = match <Multipart as axum::extract::FromRequest<AppState>>::from_request(req, &st).await {
+        Ok(m) => m,
+        Err(e) => return e.into_response(),
+    };
+    let form = match super::documents::read_upload_form(&st, &mut mp, st.config.max_upload_bytes).await {
+        Ok(f) => f,
+        Err(e) => return e.into_response(),
+    };
+    let lock = match Lock::load(&st).await {
+        Ok(l) => l,
+        Err(e) => return e.into_response(),
+    };
+    match store(&st, &lock, form).await {
+        Ok(v) => Json(Value::Array(v)).into_response(),
+        Err(e) => AppError::bad_request(e).into_response(),
+    }
 }
