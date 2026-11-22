@@ -212,6 +212,22 @@ pub fn open_external(url: &str) {
 
 use wasm_bindgen::JsCast;
 
+/// Fensterbefehl des Desktop-Clients (`minimize`, `toggleMaximize`, `close`).
+pub fn window_action(method: &str) {
+    let Some(w) = web_sys::window() else { return };
+    let get = |o: &wasm_bindgen::JsValue, k: &str| js_sys::Reflect::get(o, &k.into()).ok();
+    let Some(win_mod) = get(&w, "__TAURI__").and_then(|t| get(&t, "window")) else { return };
+    let Some(current) = get(&win_mod, "getCurrentWindow")
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call0(&win_mod).ok())
+    else {
+        return;
+    };
+    if let Some(f) = get(&current, method).and_then(|f| f.dyn_into::<js_sys::Function>().ok()) {
+        let _ = f.call0(&current);
+    }
+}
+
 /// Befehl des Desktop-Clients (Tauri) aufrufen.
 pub async fn invoke<T: DeserializeOwned>(cmd: &str, args: serde_json::Value) -> Result<T, String> {
     let js_err = |e: wasm_bindgen::JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));

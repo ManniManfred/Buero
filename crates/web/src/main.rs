@@ -82,7 +82,15 @@ fn App() -> impl IntoView {
         }
     });
 
+    if api::is_desktop() {
+        // Fenster ohne Systemrahmen: eigene Titelleiste (Abstände über CSS)
+        let _ = document().document_element().map(|e| e.class_list().add_1("desktop"));
+    }
+
     view! {
+        <Show when=api::is_desktop>
+            <components::titlebar::TitleBar ready=Signal::derive(move || phase.get() == Phase::Ready) />
+        </Show>
         {move || match phase.get() {
             Phase::Loading => view! { <div class="center muted">"Lade…"</div> }.into_any(),
             Phase::NeedServer => view! { <ServerSetup on_done=Callback::new(move |_| check()) /> }.into_any(),

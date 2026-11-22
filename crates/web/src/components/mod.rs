@@ -13,6 +13,7 @@ pub mod scan;
 pub mod settings;
 pub mod share;
 pub mod sidebar;
+pub mod titlebar;
 pub mod toolbar;
 pub mod tupfer;
 pub mod update;
