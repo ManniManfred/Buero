@@ -1,12 +1,16 @@
 name: Release (Desktop-Client, Docker-Image & CapRover-Deploy)
 
-# Bei einem Versions-Tag (v1.2.3):
-#  1. Desktop-Client für Windows und Linux bauen und als Entwurf eines
+# Bei einem Versions-Tag (v1.2.3), damit die Webseite schnell aktuell ist:
+#  1. sofort (parallel zum Desktop-Client) ein Docker-Image ohne
+#     Installationsdateien bauen (`:v1.2.3-web`) und auf CapRover ausrollen,
+#  2. Desktop-Client für Windows und Linux bauen und als Entwurf eines
 #     GitHub-Releases hochladen,
-#  2. Docker-Image mit genau diesen Installationsdateien bauen (Download über
-#     die Weboberfläche) und nach GHCR pushen,
-#  3. sofern die Secrets CAPROVER_SERVER, CAPROVER_APP und CAPROVER_APP_TOKEN
-#     gesetzt sind, auf CapRover ausrollen.
+#  3. danach das endgültige Image mit genau diesen Installationsdateien
+#     (Download über die Weboberfläche) bauen – dank Build-Cache nur die
+#     letzte Schicht – und nach GHCR pushen (`:v1.2.3`, `:1.2`, `:latest`),
+#  4. es erneut ausrollen.
+# Ausgerollt wird nur, wenn die Secrets CAPROVER_SERVER, CAPROVER_APP und
+# CAPROVER_APP_TOKEN gesetzt sind.
 # Manuell (Run workflow) auf einem Branch: nur der Desktop-Client.
 
 on:
@@ -94,9 +98,64 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  image:
-    needs: desktop
+  # Schnell: Image ohne Desktop-Installationsdateien, sofort ausrollen
+  image-web:
     if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: name
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "image=ghcr.io/${owner}/buero:${GITHUB_REF_NAME}-web" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.name.outputs.image }}
+          build-args: BUERO_VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-web:
+    needs: image-web
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: caprover-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Auf CapRover ausrollen (ohne Desktop-Installationsdateien)
+        env:
+          CAPROVER_SERVER: ${{ secrets.CAPROVER_SERVER }}
+          CAPROVER_APP: ${{ secrets.CAPROVER_APP }}
+          CAPROVER_APP_TOKEN: ${{ secrets.CAPROVER_APP_TOKEN }}
+          IMAGE: ${{ needs.image-web.outputs.image }}
+        run: |
+          if [ -z "$CAPROVER_SERVER" ] || [ -z "$CAPROVER_APP" ] || [ -z "$CAPROVER_APP_TOKEN" ]; then
+            echo "::warning::CapRover-Secrets fehlen – Image gebaut, aber nicht ausgerollt."
+            exit 0
+          fi
+          echo "Rolle $IMAGE auf $CAPROVER_APP aus …"
+          npx --yes caprover deploy \
+            --caproverUrl "$CAPROVER_SERVER" \
+            --appToken "$CAPROVER_APP_TOKEN" \
+            --appName "$CAPROVER_APP" \
+            --imageName "$IMAGE"
+
+  # Endgültig: Image mit den Installationsdateien des Desktop-Clients
+  image:
+    needs: [desktop, image-web]
+    # image-web nur abwarten (Build-Cache), nicht von seinem Erfolg abhängen
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.desktop.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.name.outputs.image }}
@@ -140,9 +199,14 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    needs: image
+    # Erst nach dem schnellen Ausrollen, damit nie das ältere Image zuletzt landet
+    needs: [image, deploy-web]
+    if: ${{ !cancelled() && needs.image.result == 'success' }}
     runs-on: ubuntu-latest
     environment: production
+    concurrency:
+      group: caprover-deploy
+      cancel-in-progress: false
     steps:
       - name: Auf CapRover ausrollen
         env:

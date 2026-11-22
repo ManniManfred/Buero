@@ -96,9 +96,11 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
 ### Kontinuierliches Deployment (empfohlen)
 
 Gebaut und ausgerollt wird **nur bei einem Versions-Tag** (`v*`): GitHub
-Actions baut dann zuerst den Desktop-Client, danach das Image
-(`ghcr.io/mannimanfred/buero:v1.2.3`, zusätzlich `:1.2` und `:latest`) mit
-dessen Installationsdateien und rollt es automatisch auf CapRover aus
+Actions baut dann sofort ein Image ohne Desktop-Installationsdateien
+(`ghcr.io/mannimanfred/buero:v1.2.3-web`) und rollt es auf CapRover aus – die
+Webseite ist so nach wenigen Minuten aktuell. Parallel entsteht der
+Desktop-Client; danach wird das endgültige Image (`:v1.2.3`, zusätzlich `:1.2`
+und `:latest`) mit dessen Installationsdateien gebaut und erneut ausgerollt
 (`.github/workflows/release.yml`). Normale Pushes auf `master` lösen nichts aus.
 Der CapRover-Server muss nichts kompilieren.
 
