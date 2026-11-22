@@ -375,3 +375,38 @@ a.button:hover { border-color: var(--accent); }
 .update-banner > .ico { color: var(--accent); width: 20px; height: 20px; margin-top: 2px; }
 .update-text { display: flex; flex-direction: column; gap: 2px; }
 .update-banner .button-row { grid-column: 2; }
+
+/* Smartphone */
+.mobile-only { display: none !important; }
+@media (max-width: 900px) {
+  .mobile-only { display: inline-flex !important; }
+  .main, .detail { height: 100dvh; }
+  .dashboard-head h2 { flex: 1; }
+  .dashboard-head { gap: 8px; }
+}
+@media (max-width: 600px) {
+  .toolbar { padding: 8px 10px; gap: 6px; }
+  .toolbar .btn-text, .dashboard-head .btn-text { display: none; }
+  .toolbar button.primary, .dashboard-head button:not(.icon) { padding: 8px 10px; }
+  .search input { font-size: 16px; } /* verhindert Auto-Zoom unter iOS */
+  .dashboard { padding: 12px 10px 24px; gap: 12px; }
+  .dashboard-head h2 { font-size: 20px; }
+  .dash-card { padding: 12px 14px; }
+  .dash-grid { gap: 12px; }
+  .hero-figure { font-size: 36px; }
+  .hero-unit { font-size: 16px; }
+  .seg-bar { height: 22px; }
+  .seg { line-height: 22px; font-size: 11px; padding-left: 4px; }
+  .legend { flex-direction: column; gap: 6px; }
+  .legend li { display: flex; }
+  .legend li .muted { margin-left: auto; }
+  .num-table { max-width: none; }
+  .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat-tile { padding: 10px 12px; }
+  .stat-value { font-size: 20px; }
+  .hbars { grid-template-columns: minmax(0, max-content) minmax(24px, 1fr) auto; }
+  .hbar-row { gap: 6px; padding: 8px 0; }
+  .vbars { height: 130px; gap: 1px; }
+  .vbar-label { font-size: 9px; }
+  .dash-docs li { padding: 10px 4px; }
+}

@@ -16,6 +16,9 @@ pub fn Toolbar() -> impl IntoView {
 
     view! {
         <div class="toolbar">
+            <button class="icon mobile-only" title="Übersicht" aria-label="Übersicht" on:click=move |_| c.dashboard.set(true)>
+                <Icon name="dashboard" />
+            </button>
             <div class="search">
                 <Icon name="search" class="search-icon" />
                 <input id="search" type="search" autocomplete="off" spellcheck="false"
@@ -33,7 +36,7 @@ pub fn Toolbar() -> impl IntoView {
                 <option value="date_asc">"Dokumentdatum ↑"</option>
             </select>
             <button class="primary" on:click=move |_| { if let Some(i) = file_input.get() { i.click(); } }>
-                <Icon name="upload" />"Hochladen"
+                <Icon name="upload" /><span class="btn-text">"Hochladen"</span>
             </button>
             <input type="file" multiple style="display:none" node_ref=file_input
                 on:change=move |_| {

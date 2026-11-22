@@ -50,8 +50,14 @@ pub fn DashboardView() -> impl IntoView {
     view! {
         <div class="dashboard">
             <div class="dashboard-head">
+                <button class="icon mobile-only" title="Zu den Dokumenten" aria-label="Zu den Dokumenten"
+                    on:click=move |_| c.dashboard.set(false)>
+                    <Icon name="search" />
+                </button>
                 <h2>"Übersicht"</h2>
-                <button on:click=move |_| { load(); c.load_meta(); }><Icon name="history" />"Aktualisieren"</button>
+                <button on:click=move |_| { load(); c.load_meta(); } title="Aktualisieren">
+                    <Icon name="history" /><span class="btn-text">"Aktualisieren"</span>
+                </button>
             </div>
             {move || match data.get() {
                 None => view! { <p class="muted">"Lade…"</p> }.into_any(),
