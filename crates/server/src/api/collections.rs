@@ -13,21 +13,22 @@ use crate::state::AppState;
 use crate::util::now;
 
 pub async fn list(State(st): State<AppState>) -> AppResult<Json<Vec<Collection>>> {
-    let rows: Vec<(i64, Option<i64>, String, Option<String>, i64)> = sqlx::query_as(
+    let rows: Vec<(i64, Option<i64>, String, Option<String>, i64, bool)> = sqlx::query_as(
         "SELECT c.id, c.parent_id, c.name, c.color, \
-         (SELECT COUNT(*) FROM document_collections dc WHERE dc.collection_id = c.id) \
+         (SELECT COUNT(*) FROM document_collections dc WHERE dc.collection_id = c.id), c.ai_locked \
          FROM collections c ORDER BY c.name COLLATE NOCASE",
     )
     .fetch_all(&st.pool)
     .await?;
     Ok(Json(
         rows.into_iter()
-            .map(|(id, parent_id, name, color, document_count)| Collection {
+            .map(|(id, parent_id, name, color, document_count, ai_locked)| Collection {
                 id,
                 parent_id,
                 name,
                 color,
                 document_count,
+                ai_locked,
             })
             .collect(),
     ))
@@ -98,6 +99,9 @@ pub async fn update(
     if let Some(c) = i.color {
         sqlx::query("UPDATE collections SET color = ? WHERE id = ?")
             .bind(Some(c).filter(|c| !c.is_empty())).bind(id).execute(&st.pool).await?;
+    }
+    if let Some(l) = i.ai_locked {
+        sqlx::query("UPDATE collections SET ai_locked = ? WHERE id = ?").bind(l).bind(id).execute(&st.pool).await?;
     }
     // Namen und Vorfahren stecken im Index -> betroffene Dokumente neu indexieren
     let docs = db::docs_in_collections(&st.pool, &subtree).await?;

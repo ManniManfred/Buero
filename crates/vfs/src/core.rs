@@ -1145,6 +1145,7 @@ impl Vfs {
             name: (sanitize_name(&current.name) != newname).then(|| newname.to_string()),
             parent_id: (current.parent_id != new_parent).then_some(new_parent.unwrap_or(0)),
             color: None,
+            ai_locked: None,
         };
         self.client.update_collection(c, &input)?;
         self.refresh(true)
@@ -1349,7 +1350,7 @@ mod tests {
     }
 
     fn coll(id: i64, parent: Option<i64>, name: &str) -> Collection {
-        Collection { id, parent_id: parent, name: name.into(), color: None, document_count: 0 }
+        Collection { id, parent_id: parent, name: name.into(), color: None, document_count: 0, ai_locked: false }
     }
 
     #[test]

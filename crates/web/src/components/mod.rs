@@ -5,6 +5,7 @@ pub mod dashboard;
 pub mod desktop;
 pub mod detail;
 pub mod drive;
+pub mod mcp;
 pub mod office;
 pub mod public;
 pub mod results;

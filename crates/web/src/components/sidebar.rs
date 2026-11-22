@@ -56,7 +56,7 @@ fn create_collection(c: Ctx, parent: Option<i64>) {
     };
     let Some(name) = prompt(&label, "") else { return };
     spawn_local(async move {
-        let body = CollectionInput { name: Some(name), parent_id: parent, color: None };
+        let body = CollectionInput { name: Some(name), parent_id: parent, color: None, ai_locked: None };
         match c.api.send::<_, Collection>("POST", "/api/collections", &body).await {
             Ok(_) => c.load_meta(),
             Err(e) => c.notify(e, true),
@@ -199,6 +199,9 @@ fn tree_level(c: Ctx, collapsed: RwSignal<HashSet<i64>>, parent: Option<i64>, de
                         </span>
                         <span class="dot" style=format!("background:{}", if color.is_empty() { "var(--muted)".to_string() } else { color.clone() })></span>
                         <span class="grow ellipsis">{name.clone()}</span>
+                        {col.ai_locked.then(|| view! {
+                            <span class="ai-lock" title="Für den KI-Zugang (MCP) gesperrt – samt Untersammlungen"><Icon name="lock" class="sm" /></span>
+                        })}
                         <span class="count">{col.document_count}</span>
                         <span class="row-actions">
                             <button class="icon" title="Sammlung freigeben" on:click={
@@ -225,9 +228,11 @@ fn tree_level(c: Ctx, collapsed: RwSignal<HashSet<i64>>, parent: Option<i64>, de
 }
 
 fn edit_collection(c: Ctx, id: i64, name: String) {
+    let locked = c.collections.with_untracked(|cs| cs.iter().any(|x| x.id == id && x.ai_locked));
+    let lock_label = if locked { "Für KI-Zugang freigeben" } else { "Für KI-Zugang sperren" };
     let Some(action) = prompt(
         &format!(
-            "Sammlung „{name}“ bearbeiten:\n\n1 = Umbenennen\n2 = Farbe ändern\n3 = Verschieben\n4 = Löschen"
+            "Sammlung „{name}“ bearbeiten:\n\n1 = Umbenennen\n2 = Farbe ändern\n3 = Verschieben\n4 = Löschen\n5 = {lock_label}"
         ),
         "1",
     ) else {
@@ -235,6 +240,17 @@ fn edit_collection(c: Ctx, id: i64, name: String) {
     };
     let mut body = CollectionInput::default();
     match action.as_str() {
+        "5" => {
+            let msg = if locked {
+                format!("„{name}“ wieder für den KI-Zugang (MCP) freigeben?\nDokumente darin werden dann für KI-Assistenten auffindbar und lesbar.")
+            } else {
+                format!("„{name}“ samt Untersammlungen für den KI-Zugang (MCP) sperren?\nDokumente darin werden KI-Assistenten nie angezeigt – auch nicht, wenn sie zusätzlich in anderen Sammlungen liegen.")
+            };
+            if !confirm(&msg) {
+                return;
+            }
+            body.ai_locked = Some(!locked);
+        }
         "1" => body.name = prompt("Neuer Name:", &name),
         "2" => {
             let list = COLORS.iter().enumerate().skip(1).map(|(i, c)| format!("{i} = {c}")).collect::<Vec<_>>().join("\n");
@@ -273,7 +289,7 @@ fn edit_collection(c: Ctx, id: i64, name: String) {
         }
         _ => return,
     }
-    if body.name.is_none() && body.color.is_none() && body.parent_id.is_none() {
+    if body.name.is_none() && body.color.is_none() && body.parent_id.is_none() && body.ai_locked.is_none() {
         return;
     }
     spawn_local(async move {

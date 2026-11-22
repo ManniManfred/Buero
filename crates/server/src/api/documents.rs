@@ -33,6 +33,7 @@ pub async fn list(
         tags: parse_ids(&p.tags),
         kind: p.kind.clone(),
         unfiled: p.unfiled,
+        exclude_collections: Vec::new(),
         sort: p.sort.clone(),
         offset: p.offset,
         limit: if p.limit == 0 { 50 } else { p.limit },

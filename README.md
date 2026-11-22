@@ -49,6 +49,14 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
   Untersammlungen) für Leute ohne Zugang – wahlweise mit Passwort, Ablaufdatum
   und (bei Sammlungen) Upload-Möglichkeit, z. B. für den Steuerberater. Links
   lassen sich jederzeit widerrufen; Büro zählt die Aufrufe.
+- **KI-Zugang (MCP)**: KI-Assistenten wie Claude können unter `/mcp` (Model
+  Context Protocol, Streamable HTTP) suchen und erkannten Text lesen – nur
+  lesend und nur mit einem Zugangsschlüssel aus den Einstellungen (gilt
+  nirgends sonst, jederzeit widerrufbar). Sammlungen lassen sich für den
+  KI-Zugang **sperren**: Ihre Dokumente samt Untersammlungen werden nie
+  ausgeliefert, auch nicht als Treffer oder in Zählungen – selbst wenn sie
+  zusätzlich in anderen Sammlungen liegen. Einrichten in Claude Code:
+  `claude mcp add --transport http buero https://…/mcp --header "Authorization: Bearer bmcp_…"`
 - **Datensicherung**: Backup als tar-Archiv herunterladen und wieder einspielen,
   direkt in der Oberfläche.
 - **Bearbeiten mit Euro-Office** (OnlyOffice-kompatibel): Word-, Excel- und

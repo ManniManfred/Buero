@@ -131,6 +131,9 @@ pub struct Collection {
     pub name: String,
     pub color: Option<String>,
     pub document_count: i64,
+    /// Für den KI-Zugang (MCP) gesperrt – gilt auch für alle Untersammlungen
+    #[serde(default)]
+    pub ai_locked: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,6 +142,8 @@ pub struct CollectionInput {
     /// `Some(None)` wird als `0` übertragen: 0 = Wurzel
     pub parent_id: Option<i64>,
     pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_locked: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -419,4 +424,29 @@ pub struct RestoreResult {
     pub missing_files: i64,
     /// Zeitpunkt des Backups
     pub created_at: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+// KI-Zugang (MCP)
+// ---------------------------------------------------------------------------
+
+/// Zugangsschlüssel für den MCP-Endpunkt (der Schlüssel selbst wird nur beim Anlegen gezeigt)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApiToken {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApiTokenInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApiTokenCreated {
+    #[serde(flatten)]
+    pub info: ApiToken,
+    pub token: String,
 }

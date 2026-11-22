@@ -181,7 +181,7 @@ impl Client {
     }
 
     pub fn create_collection(&self, name: &str, parent: Option<i64>) -> ApiResult<Collection> {
-        let input = CollectionInput { name: Some(name.to_string()), parent_id: parent, color: None };
+        let input = CollectionInput { name: Some(name.to_string()), parent_id: parent, color: None, ai_locked: None };
         Self::json(self.auth(self.agent.post(&self.url("/api/collections"))).send_json(&input))
     }
 

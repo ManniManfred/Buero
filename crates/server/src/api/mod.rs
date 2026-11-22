@@ -19,6 +19,7 @@ mod auth;
 pub(crate) mod backup;
 mod collections;
 mod dashboard;
+mod mcp;
 mod desktop;
 pub(crate) mod documents;
 mod office;
@@ -56,6 +57,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/backup", get(backup::backup))
         .route("/api/admin/restore", post(backup::restore).layer(DefaultBodyLimit::disable()))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/mcp/tokens", get(mcp::list_tokens).post(mcp::create_token))
+        .route("/api/mcp/tokens/{id}", axum::routing::delete(mcp::delete_token))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::require_auth));
 
     let public = Router::new()
@@ -64,6 +67,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/desktop", get(desktop::list))
         .route("/api/desktop/update", get(desktop::update))
+        // KI-Zugang, geprüft über eigene Zugangsschlüssel (api_tokens)
+        .route("/mcp", get(mcp::get_mcp).post(mcp::post_mcp))
         // Freigabelinks (Zugriff ohne Anmeldung, geprüft über Token/Passwort)
         .route("/api/public/shares/{token}", get(shares::public_get))
         .route("/api/public/shares/{token}/unlock", post(shares::public_unlock))

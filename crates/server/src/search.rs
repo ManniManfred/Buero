@@ -75,6 +75,8 @@ pub struct Query_ {
     pub tags: Vec<i64>,
     pub kind: String,
     pub unfiled: bool,
+    /// Dokumente aus diesen Sammlungen (samt Untersammlungen) ausschließen
+    pub exclude_collections: Vec<i64>,
     pub sort: String,
     pub offset: usize,
     pub limit: usize,
@@ -340,6 +342,12 @@ impl SearchIndex {
         for t in &q.tags {
             clauses.push((Occur::Must, Box::new(TermQuery::new(
                 Term::from_field_u64(f.tag, *t as u64),
+                IndexRecordOption::Basic,
+            ))));
+        }
+        for c in &q.exclude_collections {
+            clauses.push((Occur::MustNot, Box::new(TermQuery::new(
+                Term::from_field_u64(f.collection, *c as u64),
                 IndexRecordOption::Basic,
             ))));
         }

@@ -344,7 +344,7 @@ fn CollectionPicker(id: i64, detail: RwSignal<Option<DocumentDetail>>) -> impl I
                             toggle(cid, true);
                         } else {
                             spawn_local(async move {
-                                let body = shared::CollectionInput { name: Some(name), parent_id: None, color: None };
+                                let body = shared::CollectionInput { name: Some(name), parent_id: None, color: None, ai_locked: None };
                                 match c.api.send::<_, Collection>("POST", "/api/collections", &body).await {
                                     Ok(col) => { c.collections.update(|v| v.push(col.clone())); toggle(col.id, true); }
                                     Err(e) => c.notify(e, true),

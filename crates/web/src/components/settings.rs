@@ -45,6 +45,8 @@ pub fn Settings() -> impl IntoView {
                     c.share_target.set(Some(crate::state::ShareTarget::default()));
                 }><crate::icons::Icon name="link" />"Alle Freigaben verwalten"</button>
                 <hr />
+                <crate::components::mcp::McpSection />
+                <hr />
                 <h3>"Wartung"</h3>
                 <p class="muted small">"Suchindex aus der Datenbank neu aufbauen (z. B. nach einem Update)."</p>
                 <button on:click=move |_| {
