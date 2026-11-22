@@ -20,5 +20,5 @@ console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = [
   "Window", "Document", "Location", "Storage", "File", "FileList", "FormData",
   "DataTransfer", "DragEvent", "HtmlInputElement", "HtmlSelectElement", "KeyboardEvent",
-  "Blob", "Element", "Navigator",
+  "Blob", "Element", "Navigator", "DomRect",
 ] }

@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod office;
 pub mod public;
 pub mod results;
+pub mod scan;
 pub mod settings;
 pub mod share;
 pub mod sidebar;

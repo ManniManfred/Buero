@@ -68,6 +68,8 @@ pub struct Ctx {
     pub office_doc: RwSignal<Option<i64>>,
     /// Dokument, das gerade im Tupfer Designer geöffnet ist
     pub tupfer_doc: RwSignal<Option<i64>>,
+    /// Dokumentenscanner (Kamera) geöffnet
+    pub scan: RwSignal<bool>,
 }
 
 pub const PAGE: usize = 50;
@@ -105,6 +107,7 @@ impl Ctx {
             share_target: RwSignal::new(None),
             office_doc: RwSignal::new(None),
             tupfer_doc: RwSignal::new(None),
+            scan: RwSignal::new(false),
         }
     }
 

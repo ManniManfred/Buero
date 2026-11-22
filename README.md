@@ -20,6 +20,13 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
 - **Upload** per Drag & Drop (ins ganze Fenster) oder Dateiauswahl, mehrere
   Dateien parallel. Ist links eine Sammlung gewählt, landen Uploads direkt darin.
   Doppelte Dateien werden am SHA-256-Hash erkannt und nicht doppelt gespeichert.
+- **Scannen mit der Handy-Kamera** direkt im Browser (Knopf „Scannen“, Kamera-Symbol):
+  mehrere Seiten nacheinander aufnehmen, Blattränder werden automatisch erkannt
+  und lassen sich mit Lupe von Hand nachziehen; die Seiten werden perspektivisch
+  entzerrt, aufgehellt (Filter *Dokument*, *Farbe*, *Graustufen*, *Original*),
+  lassen sich drehen, umsortieren und löschen und werden als **eine PDF** hochgeladen
+  (danach OCR wie bei jedem Scan). Läuft komplett im Browser, braucht HTTPS; ohne
+  Kamerazugriff geht es über die Kamera-App oder Bilder aus der Galerie.
 - **Texterkennung** im Hintergrund:
   - PDF mit Textebene (`pdftotext`), gescannte PDFs und Bilder per **OCR**
     (Tesseract, Deutsch + Englisch)

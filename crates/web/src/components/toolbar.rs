@@ -35,6 +35,9 @@ pub fn Toolbar() -> impl IntoView {
                 <option value="date_desc">"Dokumentdatum ↓"</option>
                 <option value="date_asc">"Dokumentdatum ↑"</option>
             </select>
+            <button title="Dokument mit der Kamera scannen" on:click=move |_| c.scan.set(true)>
+                <Icon name="camera" /><span class="btn-text">"Scannen"</span>
+            </button>
             <button class="primary" on:click=move |_| { if let Some(i) = file_input.get() { i.click(); } }>
                 <Icon name="upload" /><span class="btn-text">"Hochladen"</span>
             </button>

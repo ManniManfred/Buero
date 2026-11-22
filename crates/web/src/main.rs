@@ -278,6 +278,9 @@ fn Main() -> impl IntoView {
         <Show when=move || c.show_settings.get()>
             <components::settings::Settings />
         </Show>
+        <Show when=move || c.scan.get()>
+            <components::scan::Scanner />
+        </Show>
         {move || c.share_target.get().map(|t| view! { <components::share::ShareDialog target=t /> })}
         {move || c.office_doc.get().map(|id| {
             let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone())).unwrap_or_default();
