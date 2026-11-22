@@ -186,7 +186,7 @@ async fn handle(st: &AppState, msg: Value) -> Option<Value> {
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "buero", "title": "Büro", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "buero", "title": "Büro", "version": super::desktop::server_version() },
                 "instructions": "Zugriff auf die persönliche Dokumentenverwaltung Büro (nur lesend). \
                     Mit search_documents suchen (Treffer enthalten kurze Ausschnitte), mit get_document \
                     den erkannten Text eines Dokuments lesen. Den Volltext nur abrufen, wenn er für die \

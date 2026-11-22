@@ -102,7 +102,7 @@ pub async fn backup(State(st): State<AppState>) -> AppResult<Response> {
     let manifest = serde_json::to_vec_pretty(&serde_json::json!({
         "format": FORMAT,
         "format_version": FORMAT_VERSION,
-        "app_version": env!("CARGO_PKG_VERSION"),
+        "app_version": super::desktop::server_version(),
         "created_at": created_at,
         "documents": documents,
     }))
