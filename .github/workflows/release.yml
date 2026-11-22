@@ -51,10 +51,27 @@ jobs:
         run: |
           cargo fetch
           cargo about generate --offline about.hbs -o crates/web/licenses.html
+      # Version aus dem Tag; Update-Dateien (*.sig) nur mit Signaturschlüssel
+      - name: Release-Konfiguration
+        shell: bash
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          conf=crates/desktop/tauri.conf.json
+          jq --arg v "${TAG#v}" --argjson sign "$HAS_KEY" \
+            '(if $v != "" then .version = $v else . end) | .bundle.createUpdaterArtifacts = $sign' \
+            "$conf" > conf.tmp && mv conf.tmp "$conf"
+          jq '{version, createUpdaterArtifacts: .bundle.createUpdaterArtifacts}' "$conf"
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::warning::Secret TAURI_SIGNING_PRIVATE_KEY fehlt – Desktop-Client ohne Update-Signaturen gebaut."
+          fi
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUERO_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/desktop
           tauriScript: cargo tauri
@@ -67,7 +84,8 @@ jobs:
         run: |
           shopt -s nullglob
           mkdir -p desktop-dist
-          cp target/release/bundle/*/*.{exe,msi,deb,rpm,AppImage} desktop-dist/
+          # Installationsdateien und ihre Signaturen (für Updates)
+          cp target/release/bundle/*/*.{exe,msi,deb,rpm,AppImage}{,.sig} desktop-dist/
           ls -l desktop-dist
       - uses: actions/upload-artifact@v4
         with:

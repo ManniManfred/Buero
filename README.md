@@ -218,6 +218,36 @@ die Webseite auf die GitHub-Releases.
 Beim ersten Start fragt der Client nach der Server-Adresse
 (z. B. `https://buero.deine-domain.de`), danach nach dem Passwort.
 
+### Automatische Updates
+
+Der Desktop-Client holt Updates von **seinem eigenen Büro-Server**
+(`/api/desktop/update`) und passt damit immer zu dessen Version: Nach jeder
+Anmeldung fragt er nach, ob der Server eine neuere Version mitbringt, und
+bietet sie unten rechts an (*Jetzt aktualisieren* – herunterladen,
+installieren, neu starten). Von Hand: *Einstellungen → Updates*.
+
+Installiert wird nur, was mit dem Update-Schlüssel signiert ist. Einmalig
+einrichten:
+
+1. Schlüsselpaar erzeugen (Passwort merken):
+   `cargo tauri signer generate -w ~/.tauri/buero-updater.key`
+2. Inhalt von `~/.tauri/buero-updater.key` als GitHub-Secret
+   `TAURI_SIGNING_PRIVATE_KEY` hinterlegen, das Passwort als
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. Den öffentlichen Schlüssel (`~/.tauri/buero-updater.key.pub`) in
+   `crates/desktop/tauri.conf.json` unter `plugins.updater.pubkey` eintragen.
+
+Der Release-Workflow signiert dann alle Installationsdateien (`*.sig`) und
+legt sie mit ins Docker-Image. Ohne Secret wird weiter gebaut, nur ohne
+Updates; ohne `pubkey` sucht der Client nicht nach Updates. Der private
+Schlüssel darf nicht verloren gehen – mit einem neuen Schlüssel lassen sich
+bestehende Installationen nicht mehr automatisch aktualisieren.
+
+Aktualisiert wird im selben Format, in dem die App installiert wurde
+(Windows-Installer bzw. MSI, AppImage, `.deb`, `.rpm`; bei `.deb`/`.rpm` fragt
+Linux nach dem Administrator-Passwort). Die App-Version kommt beim Release
+aus dem Git-Tag.
+
 ### Sammlungen als Laufwerk
 
 Unter *Einstellungen → Laufwerk* bindet der Desktop-Client die Sammlungen als
@@ -299,6 +329,7 @@ Alle Endpunkte (außer Anmeldung/Status und Desktop-Download) erwarten `Authoriz
 | `GET` | `/api/auth/status` | Anmeldung nötig / gültig? |
 | `GET` | `/api/dashboard` | Übersicht: Speicherplatz (Datenträger, Belegung nach Bereichen) und Kennzahlen |
 | `GET` | `/api/desktop` · `/desktop/{datei}` | Angebotene Installationsdateien des Desktop-Clients · Download (ohne Anmeldung) |
+| `GET` | `/api/desktop/update?target=&arch=&bundle=&version=` | Update für den Desktop-Client (Tauri-Updater-Format, `204` = keins) |
 | `GET` | `/api/documents?q=&collections=&tags=&kind=&unfiled=&sort=&offset=&limit=` | Suche & Liste |
 | `POST` | `/api/documents` | Upload (multipart: `file` beliebig oft, optional `collection_ids`, `tag_ids`, `title`, `document_date`) |
 | `GET/PATCH/DELETE` | `/api/documents/{id}` | Details / ändern (Titel, Notiz, Datum, Sammlungen, Tags) / löschen |

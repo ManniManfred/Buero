@@ -41,5 +41,12 @@
     "license": "AGPL-3.0-or-later",
     "licenseFile": "../../LICENSE",
     "shortDescription": "Dokumentenverwaltung"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "dangerousInsecureTransportProtocol": true,
+      "requireSignedVersion": true
+    }
   }
 }

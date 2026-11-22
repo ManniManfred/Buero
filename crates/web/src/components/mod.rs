@@ -13,4 +13,5 @@ pub mod share;
 pub mod sidebar;
 pub mod toolbar;
 pub mod tupfer;
+pub mod update;
 pub mod upload;

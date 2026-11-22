@@ -44,13 +44,15 @@ fn describe(name: &str) -> (Os, &'static str) {
     }
 }
 
-fn file_url(name: &str) -> String {
-    ctx().api.url(&format!("/desktop/{}", String::from(js_sys::encode_uri_component(name))))
+fn file_url(api: crate::api::Api, name: &str) -> String {
+    api.url(&format!("/desktop/{}", String::from(js_sys::encode_uri_component(name))))
 }
 
 fn load(files: RwSignal<Option<Vec<DesktopDownload>>>) {
+    // Kontext vorher holen: in der asynchronen Aufgabe gibt es keinen
+    let api = ctx().api;
     spawn_local(async move {
-        let r = ctx().api.get::<Vec<DesktopDownload>>("/api/desktop").await;
+        let r = api.get::<Vec<DesktopDownload>>("/api/desktop").await;
         files.set(Some(r.unwrap_or_default()));
     });
 }
@@ -59,6 +61,7 @@ fn load(files: RwSignal<Option<Vec<DesktopDownload>>>) {
 /// passende für das eigene System zuerst.
 #[component]
 pub fn DesktopSection() -> impl IntoView {
+    let api = ctx().api;
     let files = RwSignal::new(None::<Vec<DesktopDownload>>);
     load(files);
     let os = current_os();
@@ -86,7 +89,7 @@ pub fn DesktopSection() -> impl IntoView {
                         let size = crate::util::format_size(f.size as i64);
                         view! {
                             <li class:recommended=fos == os && os != Os::Other>
-                                <a href=file_url(&f.name) download=f.name.clone()>
+                                <a href=file_url(api, &f.name) download=f.name.clone()>
                                     <Icon name="download" />
                                     <span class="download-label">{label}</span>
                                 </a>
@@ -127,6 +130,7 @@ fn preferred(files: &[DesktopDownload], os: Os) -> Option<&DesktopDownload> {
 /// Unauffälliger Link unter der Anmeldung, nur wenn es eine passende Datei gibt
 #[component]
 pub fn DesktopLoginLink() -> impl IntoView {
+    let api = ctx().api;
     let files = RwSignal::new(None::<Vec<DesktopDownload>>);
     load(files);
     let os = current_os();
@@ -135,7 +139,7 @@ pub fn DesktopLoginLink() -> impl IntoView {
         let f = preferred(&files, os)?;
         let label = if os == Os::Windows { "Desktop-App für Windows herunterladen" } else { "Desktop-App für Linux herunterladen" };
         Some(view! {
-            <a class="small muted login-download" href=file_url(&f.name) download=f.name.clone()>
+            <a class="small muted login-download" href=file_url(api, &f.name) download=f.name.clone()>
                 <Icon name="download" />{label}
             </a>
         })

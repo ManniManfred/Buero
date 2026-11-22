@@ -53,7 +53,8 @@ fn App() -> impl IntoView {
                     c.api.unauthorized.set(false);
                     phase.set(Phase::Ready);
                     if api::is_desktop() {
-                        components::drive::sync(c.api, true);
+                        components::drive::sync(c, true);
+                        components::update::check(c, false);
                     }
                 }
                 Ok(_) => phase.set(Phase::Login),
@@ -71,7 +72,7 @@ fn App() -> impl IntoView {
         if c.api.unauthorized.get() && phase.get_untracked() == Phase::Ready {
             c.api.set_token(None);
             if api::is_desktop() {
-                components::drive::sync(c.api, false);
+                components::drive::sync(c, false);
             }
             phase.set(Phase::Login);
         }
@@ -84,6 +85,9 @@ fn App() -> impl IntoView {
             Phase::Login => view! { <Login on_done=Callback::new(move |_| check()) /> }.into_any(),
             Phase::Ready => view! { <Main /> }.into_any(),
         }}
+        <Show when=api::is_desktop>
+            <components::update::UpdateBanner />
+        </Show>
         <Toast />
     }
 }

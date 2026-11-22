@@ -10,7 +10,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
-use shared::{DesktopDownload, Stats};
+use shared::Stats;
 
 use crate::error::AppResult;
 use crate::state::AppState;
@@ -19,6 +19,7 @@ mod auth;
 pub(crate) mod backup;
 mod collections;
 mod dashboard;
+mod desktop;
 pub(crate) mod documents;
 mod office;
 mod shares;
@@ -61,7 +62,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/login", post(auth::login))
-        .route("/api/desktop", get(desktop_downloads))
+        .route("/api/desktop", get(desktop::list))
+        .route("/api/desktop/update", get(desktop::update))
         // Freigabelinks (Zugriff ohne Anmeldung, geprüft über Token/Passwort)
         .route("/api/public/shares/{token}", get(shares::public_get))
         .route("/api/public/shares/{token}/unlock", post(shares::public_unlock))
@@ -108,28 +110,6 @@ async fn stats(State(st): State<AppState>) -> AppResult<Json<Stats>> {
     .fetch_one(&st.pool)
     .await?;
     Ok(Json(Stats { documents, total_size, pending, failed, unfiled }))
-}
-
-/// Endungen der Installationsdateien, die angeboten werden (Signaturen,
-/// Update-Archive u. Ä. im selben Ordner werden ausgelassen)
-const DESKTOP_EXTENSIONS: &[&str] = &["exe", "msi", "deb", "rpm", "appimage"];
-
-/// Installationsdateien des Desktop-Clients (ohne Anmeldung, damit man sich die
-/// App auch vor dem ersten Login holen kann)
-async fn desktop_downloads(State(st): State<AppState>) -> Json<Vec<DesktopDownload>> {
-    let mut out = Vec::new();
-    if let Ok(dir) = std::fs::read_dir(&st.config.desktop_dir) {
-        for e in dir.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-            let Ok(meta) = e.metadata() else { continue };
-            if meta.is_file() && name.contains('.') && DESKTOP_EXTENSIONS.contains(&ext.as_str()) {
-                out.push(DesktopDownload { name, size: meta.len() });
-            }
-        }
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    Json(out)
 }
 
 async fn reindex(State(st): State<AppState>) -> AppResult<Json<serde_json::Value>> {

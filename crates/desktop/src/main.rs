@@ -8,6 +8,10 @@
 //! Unterschiede: Server-Adresse ist frei wählbar, Dateien werden mit dem
 //! Standardprogramm des Systems geöffnet, und die Sammlungen lassen sich als
 //! Laufwerk ins System einbinden (Linux: FUSE, Windows: WinFsp).
+//!
+//! Updates kommen vom eigenen Büro-Server (`/api/desktop/update`), damit die
+//! App zur Version des Servers passt. Installiert wird nur, was mit dem
+//! Schlüssel aus `tauri.conf.json` (`plugins.updater.pubkey`) signiert ist.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -17,6 +21,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, RunEvent, State};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::UpdaterExt;
 
 /// Gespeicherte Einstellungen des Laufwerks
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -195,11 +200,94 @@ fn drive_open(app: tauri::AppHandle, st: State<'_, DriveState>) -> Result<(), St
     app.opener().open_path(p, None::<&str>).map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+/// Gefundenes, noch nicht installiertes Update
+#[derive(Default)]
+struct UpdateState(Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[derive(Serialize)]
+struct UpdateInfo {
+    /// Ohne Signaturschlüssel im Build gibt es keine Updates
+    available: bool,
+    current: String,
+    /// Neue Version, falls es eine gibt
+    version: Option<String>,
+}
+
+/// Öffentlicher Schlüssel aus `plugins.updater.pubkey` (leer = Updates aus)
+fn updater_pubkey(app: &tauri::AppHandle) -> Option<String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|u| u.get("pubkey"))
+        .and_then(|k| k.as_str())
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+}
+
+/// Beim Server nach einer neueren Version fragen
+#[tauri::command]
+async fn update_check(app: tauri::AppHandle, st: State<'_, UpdateState>, server: String) -> Result<UpdateInfo, String> {
+    let current = app.package_info().version.to_string();
+    if updater_pubkey(&app).is_none() || server.trim().is_empty() {
+        return Ok(UpdateInfo { available: false, current, version: None });
+    }
+    let endpoint = format!(
+        "{}/api/desktop/update?target={{{{target}}}}&arch={{{{arch}}}}&bundle={{{{bundle_type}}}}&version={{{{current_version}}}}",
+        server.trim().trim_end_matches('/')
+    );
+    let url = endpoint.parse().map_err(|e| format!("Ungültige Server-Adresse: {e}"))?;
+    let update = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| format!("Suche nach Updates fehlgeschlagen: {e}"))?;
+    let version = update.as_ref().map(|u| u.version.clone());
+    *st.0.lock().unwrap_or_else(|e| e.into_inner()) = update;
+    Ok(UpdateInfo { available: true, current, version })
+}
+
+/// Gefundenes Update herunterladen, installieren und neu starten
+#[tauri::command]
+async fn update_install(
+    app: tauri::AppHandle,
+    st: State<'_, UpdateState>,
+    drive: State<'_, DriveState>,
+) -> Result<(), String> {
+    let update = st.0.lock().unwrap_or_else(|e| e.into_inner()).take().ok_or("Kein Update gefunden")?;
+    let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
+    // Vor dem Installieren aushängen: unter Windows beendet der Installer die App
+    {
+        let _busy = drive.busy.lock().await;
+        unmount_now(&drive);
+    }
+    update.install(bytes).map_err(|e| format!("Installation fehlgeschlagen: {e}"))?;
+    app.restart()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DriveState::default())
-        .invoke_handler(tauri::generate_handler![drive_status, drive_mount, drive_unmount, drive_sync, drive_open])
+        .manage(UpdateState::default())
+        .invoke_handler(tauri::generate_handler![
+            drive_status,
+            drive_mount,
+            drive_unmount,
+            drive_sync,
+            drive_open,
+            update_check,
+            update_install
+        ])
         .build(tauri::generate_context!())
         .expect("Fehler beim Starten von Büro")
         .run(|app, event| {

@@ -31,6 +31,8 @@ pub fn Settings() -> impl IntoView {
                 </Show>
                 <Show when=is_desktop>
                     <crate::components::drive::DriveSection />
+                    <crate::components::update::UpdateSection />
+                    <hr />
                 </Show>
                 <Show when=|| !is_desktop()>
                     <crate::components::desktop::DesktopSection />
@@ -88,7 +90,7 @@ pub fn Settings() -> impl IntoView {
                         spawn_local(async move {
                             let _ = c.api.send_empty::<()>("POST", "/api/auth/logout", None).await;
                             if is_desktop() {
-                                crate::components::drive::sync(c.api, false);
+                                crate::components::drive::sync(c, false);
                             }
                             c.api.set_token(None);
                             let _ = window().location().reload();

@@ -8,9 +8,9 @@ use leptos::task::spawn_local;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::api::{invoke, Api};
+use crate::api::invoke;
 use crate::icons::Icon;
-use crate::state::ctx;
+use crate::state::{ctx, Ctx};
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct DriveStatus {
@@ -23,13 +23,13 @@ pub struct DriveStatus {
 }
 
 /// Nach An- oder Abmeldung: Laufwerk (falls eingeschaltet) passend ein-/aushängen.
-pub fn sync(api: Api, logged_in: bool) {
-    let server = api.base.get_untracked();
-    let token = api.token.get_untracked();
+pub fn sync(c: Ctx, logged_in: bool) {
+    let server = c.api.base.get_untracked();
+    let token = c.api.token.get_untracked();
     spawn_local(async move {
         let r = invoke::<DriveStatus>("drive_sync", json!({ "server": server, "token": token, "loggedIn": logged_in })).await;
         if let Err(e) = r {
-            ctx().notify(format!("Laufwerk: {e}"), true);
+            c.notify(format!("Laufwerk: {e}"), true);
         }
     });
 }

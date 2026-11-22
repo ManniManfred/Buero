@@ -18,6 +18,7 @@ winfsp = { version = "0.13", default-features = false, features = ["delayload"] 
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
 serde.workspace = true
 serde_json.workspace = true
 buero-vfs = { path = "../vfs" }
