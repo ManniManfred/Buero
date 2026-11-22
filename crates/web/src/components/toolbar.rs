@@ -11,11 +11,23 @@ use crate::state::{ctx, Ctx};
 
 #[component]
 pub fn Toolbar() -> impl IntoView {
+    view! {
+        // Im Desktop-Client steht die Suchzeile in der Titelleiste
+        <Show when=|| !crate::api::is_desktop()>
+            <div class="toolbar"><SearchRow /></div>
+        </Show>
+        <FilterBar />
+        <BulkBar />
+    }
+}
+
+/// Suche, Sortierung und Hochladen
+#[component]
+pub fn SearchRow() -> impl IntoView {
     let c = ctx();
     let file_input = NodeRef::<leptos::html::Input>::new();
 
     view! {
-        <div class="toolbar">
             <button class="icon mobile-only" title="Übersicht" aria-label="Übersicht" on:click=move |_| c.dashboard.set(true)>
                 <Icon name="dashboard" />
             </button>
@@ -49,9 +61,6 @@ pub fn Toolbar() -> impl IntoView {
                         start_uploads(c, files);
                     }
                 } />
-        </div>
-        <FilterBar />
-        <BulkBar />
     }
 }
 
