@@ -18,6 +18,7 @@ use crate::state::AppState;
 mod auth;
 pub(crate) mod backup;
 mod collections;
+mod dashboard;
 pub(crate) mod documents;
 mod office;
 mod shares;
@@ -48,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/features", get(office::features))
         .route("/api/office/config/{id}", get(office::config))
         .route("/api/stats", get(stats))
+        .route("/api/dashboard", get(dashboard::dashboard))
         .route("/api/admin/reindex", post(reindex))
         .route("/api/admin/reprocess-failed", post(reprocess_failed))
         .route("/api/admin/backup", get(backup::backup))

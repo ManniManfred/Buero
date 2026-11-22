@@ -211,6 +211,74 @@ pub struct Stats {
     pub unfiled: i64,
 }
 
+/// Übersicht (Dashboard): Speicherplatz und Kennzahlen
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Dashboard {
+    /// Größe und freier Platz des Datenträgers mit dem Datenordner (`None`: unbekannt)
+    pub disk_total: Option<u64>,
+    pub disk_free: Option<u64>,
+    /// Belegung des Datenordners auf dem Datenträger
+    pub storage: StorageUsage,
+    pub documents: i64,
+    /// Summe der aktuellen Fassungen
+    pub documents_size: i64,
+    /// Ältere Fassungen (ohne die aktuellen)
+    pub old_versions: i64,
+    pub old_versions_size: i64,
+    pub collections: i64,
+    pub tags: i64,
+    pub shares: i64,
+    pub pending: i64,
+    pub failed: i64,
+    pub unfiled: i64,
+    /// Nach Dokumentart, größte zuerst
+    pub kinds: Vec<KindStat>,
+    /// Neu hinzugekommene Dokumente der letzten 12 Monate (ältester zuerst, `YYYY-MM`)
+    pub months: Vec<MonthStat>,
+    pub largest: Vec<DocumentBrief>,
+    pub recent: Vec<DocumentBrief>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct StorageUsage {
+    /// Dateien aller Fassungen (gleiche Inhalte nur einmal)
+    pub files: u64,
+    pub thumbnails: u64,
+    pub index: u64,
+    pub database: u64,
+    /// Sonstiges im Datenordner (z. B. vorbereitete Wiederherstellung)
+    pub other: u64,
+}
+
+impl StorageUsage {
+    pub fn total(&self) -> u64 {
+        self.files + self.thumbnails + self.index + self.database + self.other
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KindStat {
+    pub kind: String,
+    pub count: i64,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MonthStat {
+    pub month: String,
+    pub count: i64,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentBrief {
+    pub id: i64,
+    pub title: String,
+    pub kind: String,
+    pub size: i64,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
     pub error: String,

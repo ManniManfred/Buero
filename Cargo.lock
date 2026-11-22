@@ -602,6 +602,7 @@ dependencies = [
  "hex",
  "hmac",
  "image",
+ "libc",
  "mime_guess",
  "num_cpus",
  "percent-encoding",

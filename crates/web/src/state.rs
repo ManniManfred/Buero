@@ -53,6 +53,8 @@ pub struct Ctx {
     pub uploads: RwSignal<Vec<UploadItem>>,
     pub toast: RwSignal<Option<(String, bool)>>,
     pub show_settings: RwSignal<bool>,
+    /// Übersicht (Dashboard) statt der Dokumentliste
+    pub dashboard: RwSignal<bool>,
     /// Zähler, der ein Neuladen der Liste auslöst
     pub refresh: RwSignal<u32>,
     /// Zähler, der ein Neuladen der Detailansicht auslöst
@@ -91,6 +93,7 @@ impl Ctx {
             uploads: RwSignal::new(Vec::new()),
             toast: RwSignal::new(None),
             show_settings: RwSignal::new(false),
+            dashboard: RwSignal::new(false),
             refresh: RwSignal::new(0),
             detail_refresh: RwSignal::new(0),
             features: RwSignal::new(Features::default()),

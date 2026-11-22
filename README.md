@@ -297,6 +297,7 @@ Alle Endpunkte (außer Anmeldung/Status und Desktop-Download) erwarten `Authoriz
 |---|---|---|
 | `POST` | `/api/auth/login` | `{"password": "…"}` → `{"token": "…"}` |
 | `GET` | `/api/auth/status` | Anmeldung nötig / gültig? |
+| `GET` | `/api/dashboard` | Übersicht: Speicherplatz (Datenträger, Belegung nach Bereichen) und Kennzahlen |
 | `GET` | `/api/desktop` · `/desktop/{datei}` | Angebotene Installationsdateien des Desktop-Clients · Download (ohne Anmeldung) |
 | `GET` | `/api/documents?q=&collections=&tags=&kind=&unfiled=&sort=&offset=&limit=` | Suche & Liste |
 | `POST` | `/api/documents` | Upload (multipart: `file` beliebig oft, optional `collection_ids`, `tag_ids`, `title`, `document_date`) |

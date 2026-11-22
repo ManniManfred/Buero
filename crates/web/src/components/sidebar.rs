@@ -77,7 +77,8 @@ pub fn Sidebar() -> impl IntoView {
     };
     let select_unfiled = move |_| {
         c.collection.set(None);
-        c.unfiled.set(!c.unfiled.get_untracked());
+        // In der Übersicht: Eingang zeigen statt umschalten
+        c.unfiled.set(c.dashboard.get_untracked() || !c.unfiled.get_untracked());
     };
 
     view! {
@@ -87,12 +88,16 @@ pub fn Sidebar() -> impl IntoView {
                 <button class="icon" title="Einstellungen" on:click=move |_| c.show_settings.set(true)><Icon name="settings" /></button>
             </div>
             <nav>
-                <div class="nav-item" class:active=move || c.collection.get().is_none() && !c.unfiled.get()
+                <div class="nav-item" class:active=move || c.dashboard.get() on:click=move |_| c.dashboard.set(true)
+                    title="Speicherplatz und Kennzahlen">
+                    <span class="label"><Icon name="dashboard" />"Übersicht"</span>
+                </div>
+                <div class="nav-item" class:active=move || !c.dashboard.get() && c.collection.get().is_none() && !c.unfiled.get()
                     on:click=select_all>
                     <span class="label"><Icon name="layers" />"Alle Dokumente"</span>
                     <span class="count">{move || c.stats.get().documents}</span>
                 </div>
-                <div class="nav-item" class:active=move || c.unfiled.get() on:click=select_unfiled
+                <div class="nav-item" class:active=move || !c.dashboard.get() && c.unfiled.get() on:click=select_unfiled
                     title="Dokumente, die noch keiner Sammlung zugeordnet sind">
                     <span class="label"><Icon name="inbox" />"Eingang"</span>
                     <span class="count">{move || c.stats.get().unfiled}</span>

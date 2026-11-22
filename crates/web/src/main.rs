@@ -204,6 +204,18 @@ fn Main() -> impl IntoView {
         );
     });
 
+    // Auswahl in der Seitenleiste oder Suche: Übersicht schließen
+    Effect::new(move |prev: Option<()>| {
+        c.collection.track();
+        c.tag_filter.track();
+        c.kind.track();
+        c.unfiled.track();
+        c.query.track();
+        if prev.is_some() {
+            c.dashboard.set(false);
+        }
+    });
+
     // Laufende Verarbeitung: Liste regelmäßig aktualisieren
     let poll = set_interval_with_handle(
         move || {
@@ -249,8 +261,11 @@ fn Main() -> impl IntoView {
         <div class="layout" class:with-detail=move || c.selected.get().is_some()>
             <Sidebar />
             <main class="main">
-                <Toolbar />
-                <Results />
+                <Show when=move || !c.dashboard.get()
+                    fallback=|| view! { <crate::components::dashboard::DashboardView /> }>
+                    <Toolbar />
+                    <Results />
+                </Show>
             </main>
             {move || c.selected.get().map(|id| view! { <DetailPanel id=id /> })}
         </div>
