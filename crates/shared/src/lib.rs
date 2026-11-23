@@ -548,7 +548,25 @@ pub struct MailAccount {
     /// Beim letzten Abruf übernommene Mails
     pub last_imported: i64,
     pub running: bool,
+    /// Fortschritt eines laufenden Abrufs
+    #[serde(default)]
+    pub progress: Option<MailProgress>,
     pub folders: Vec<MailFolder>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MailProgress {
+    /// Lesbarer Ordnername
+    pub folder: String,
+    /// Ordner n von m
+    pub folder_index: i64,
+    pub folder_count: i64,
+    /// Was gerade passiert, z. B. „Mails prüfen“
+    pub phase: String,
+    pub done: i64,
+    pub total: i64,
+    /// Bisher übernommene Mails in diesem Abruf
+    pub imported: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -573,6 +591,14 @@ pub struct MailAccountInput {
     pub collection_id: Option<i64>,
     /// Ersetzt die Ordnerliste
     pub folders: Option<Vec<MailFolder>>,
+}
+
+/// Mails (samt Anhängen) von einer Sammlung in eine andere verschieben
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MailMove {
+    pub from: i64,
+    /// 0 = nur aus `from` entfernen
+    pub to: i64,
 }
 
 /// Ordner auf dem Mailserver

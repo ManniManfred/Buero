@@ -44,7 +44,7 @@ pub fn MailSection() -> impl IntoView {
                 load();
             }
         },
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_millis(1500),
     )
     .ok();
     on_cleanup(move || {
@@ -89,7 +89,7 @@ pub fn MailSection() -> impl IntoView {
             "(z. B. „Gesendet“ und Posteingang: nur Mails zu Konversationen, die schon in Büro sind). Anhänge werden eigene Dokumente."
         </p>
         <ul class="mail-accounts">
-            <For each=move || accounts.get() key=|a| (a.id, a.running, a.last_run, a.enabled, a.name.clone(), a.folders.len()) let:a>
+            <For each=move || accounts.get() key=|a| format!("{}|{}|{:?}|{:?}|{}|{}|{}", a.id, a.running, a.progress, a.last_run, a.enabled, a.name, a.folders.len()) let:a>
                 <li class="mail-account">
                     <div class="grow">
                         <div><strong>{a.name.clone()}</strong>" "<span class="muted small">{format!("{}@{}", a.username, a.host)}</span></div>
@@ -101,7 +101,24 @@ pub fn MailSection() -> impl IntoView {
                                 None => format!("Noch nicht abgerufen · {} Ordner", a.folders.len()),
                              } }}
                         </div>
-                        {a.last_error.clone().map(|e| view! { <div class="small bad-text">{e}</div> })}
+                        {a.progress.clone().filter(|_| a.running).map(|p| {
+                            let pct = if p.total > 0 { (p.done * 100 / p.total).clamp(0, 100) } else { 0 };
+                            view! {
+                                <div class="mail-progress small">
+                                    <div class="muted">
+                                        {if p.folder.is_empty() { p.phase.clone() } else {
+                                            format!("Ordner {} von {}: „{}“ · {}", p.folder_index, p.folder_count, p.folder, p.phase)
+                                        }}
+                                        {(p.total > 0).then(|| format!(" · {} von {}", p.done, p.total))}
+                                        {format!(" · {} übernommen", p.imported)}
+                                    </div>
+                                    <div class="progress" class:indeterminate=p.total == 0>
+                                        <div class="progress-bar" style=format!("width: {pct}%")></div>
+                                    </div>
+                                </div>
+                            }
+                        })}
+                        {a.last_error.clone().filter(|_| !a.running).map(|e| view! { <div class="small bad-text">{e}</div> })}
                     </div>
                     <button title="Jetzt abrufen" disabled=a.running || a.folders.is_empty() on:click=move |_| run(a.id)>
                         <Icon name="download" />"Abrufen"
@@ -255,6 +272,7 @@ fn AccountEditor(account: Option<MailAccount>, on_done: Callback<()>) -> impl In
         });
     };
 
+    let old_collection = account.as_ref().map(|a| a.collection_id.unwrap_or(0));
     let submit = move |_| {
         busy.set(true);
         spawn_local(async move {
@@ -263,6 +281,35 @@ fn AccountEditor(account: Option<MailAccount>, on_done: Callback<()>) -> impl In
             match res {
                 Ok(_) => {
                     c.notify("Postfach gespeichert", false);
+                    // Sammlung geändert: bisher abgerufene Mails mitnehmen?
+                    let new: i64 = collection.get_untracked().parse().unwrap_or(0);
+                    if let Some(old) = old_collection.filter(|o| *o != new) {
+                        let n = c.api.get::<i64>(&format!("/api/mail/in-collection/{old}")).await.unwrap_or(0);
+                        let name = |id: i64| if id > 0 { format!("„{}“", c.collection_name(id)) } else { "dem Eingang (ohne Sammlung)".to_string() };
+                        if n > 0
+                            && dialog::confirm(
+                                "Bisherige Mails verschieben?",
+                                format!(
+                                    "In {} liegen {n} Mail(s). Sollen sie samt ihren Anhängen nach {} verschoben werden?",
+                                    name(old),
+                                    if new > 0 { name(new) } else { "„Eingang“".to_string() }
+                                ),
+                            )
+                            .ok("Verschieben")
+                            .ask_ok()
+                            .await
+                        {
+                            let body = shared::MailMove { from: old, to: new };
+                            match c.api.send::<_, i64>("POST", "/api/mail/move", &body).await {
+                                Ok(n) => {
+                                    c.notify(format!("{n} Mail(s) verschoben"), false);
+                                    c.load_meta();
+                                    c.reload();
+                                }
+                                Err(e) => c.notify(e, true),
+                            }
+                        }
+                    }
                     on_done.run(());
                 }
                 Err(e) => c.notify(e, true),

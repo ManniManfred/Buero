@@ -46,6 +46,7 @@ pub async fn list(State(st): State<AppState>) -> AppResult<Json<Vec<MailAccount>
                         last_error,
                         last_imported,
                         running: crate::mail::is_running(id),
+                        progress: crate::mail::progress(id),
                         folders: folders
                             .iter()
                             .filter(|f| f.0 == id)
@@ -169,6 +170,68 @@ pub async fn run(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<S
         }
     });
     Ok(StatusCode::ACCEPTED)
+}
+
+/// Wie viele Mails liegen in einer Sammlung? (Vorfrage zum Verschieben)
+/// (0 = Mails ohne Sammlung, also im Eingang)
+pub async fn count_in(State(st): State<AppState>, Path(collection): Path<i64>) -> AppResult<Json<i64>> {
+    Ok(Json(mails_in(&st, collection).await?.len() as i64))
+}
+
+/// Dokumente in einer Sammlung (0 = ohne Sammlung), gefiltert auf `ids_sql`
+async fn in_collection(st: &AppState, collection: i64, ids_sql: &str, arg: Option<i64>) -> AppResult<Vec<i64>> {
+    let cond = if collection > 0 {
+        "EXISTS (SELECT 1 FROM document_collections dc WHERE dc.document_id = x.id AND dc.collection_id = ?)"
+    } else {
+        "NOT EXISTS (SELECT 1 FROM document_collections dc WHERE dc.document_id = x.id AND ? = 0)"
+    };
+    let sql = format!("SELECT x.id FROM ({ids_sql}) x WHERE {cond}");
+    let mut q = sqlx::query_scalar(&sql);
+    if let Some(a) = arg {
+        q = q.bind(a);
+    }
+    Ok(q.bind(collection).fetch_all(&st.pool).await?)
+}
+
+async fn mails_in(st: &AppState, collection: i64) -> AppResult<Vec<i64>> {
+    in_collection(st, collection, "SELECT document_id AS id FROM emails", None).await
+}
+
+/// Mails samt ihrer Anhänge von einer Sammlung in eine andere verschieben
+/// (`to` = 0: nur aus der Sammlung nehmen)
+pub async fn move_mails(State(st): State<AppState>, Json(m): Json<shared::MailMove>) -> AppResult<Json<i64>> {
+    let mails = mails_in(&st, m.from).await?;
+    let mut docs = mails.clone();
+    for id in &mails {
+        let att = in_collection(
+            &st,
+            m.from,
+            "SELECT document_id AS id FROM email_attachments WHERE email_id = ?",
+            Some(*id),
+        )
+        .await?;
+        docs.extend(att);
+    }
+    docs.sort_unstable();
+    docs.dedup();
+    let mut tx = st.pool.begin().await?;
+    for d in &docs {
+        sqlx::query("DELETE FROM document_collections WHERE document_id = ? AND collection_id = ?")
+            .bind(d)
+            .bind(m.from)
+            .execute(&mut *tx)
+            .await?;
+        if m.to > 0 && m.to != m.from {
+            sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT ?, id FROM collections WHERE id = ?")
+                .bind(d)
+                .bind(m.to)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    st.reindex(&docs).await?;
+    Ok(Json(mails.len() as i64))
 }
 
 pub async fn email_info(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<EmailInfo>> {

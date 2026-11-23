@@ -30,15 +30,34 @@ type Session = async_imap::Session<TlsStream<TcpStream>>;
 
 /// Läuft gerade ein Abruf? (je Postfach höchstens einer)
 static RUNNING: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+/// Fortschritt laufender Abrufe je Postfach
+static PROGRESS: std::sync::Mutex<Vec<(i64, shared::MailProgress)>> = std::sync::Mutex::new(Vec::new());
 
 pub fn is_running(account: i64) -> bool {
     RUNNING.lock().unwrap().contains(&account)
+}
+
+pub fn progress(account: i64) -> Option<shared::MailProgress> {
+    PROGRESS.lock().unwrap().iter().find(|p| p.0 == account).map(|p| p.1.clone())
+}
+
+fn set_progress(account: i64, f: impl FnOnce(&mut shared::MailProgress)) {
+    let mut all = PROGRESS.lock().unwrap();
+    match all.iter_mut().find(|p| p.0 == account) {
+        Some(p) => f(&mut p.1),
+        None => {
+            let mut p = shared::MailProgress::default();
+            f(&mut p);
+            all.push((account, p));
+        }
+    }
 }
 
 struct Guard(i64);
 impl Drop for Guard {
     fn drop(&mut self) {
         RUNNING.lock().unwrap().retain(|a| *a != self.0);
+        PROGRESS.lock().unwrap().retain(|p| p.0 != self.0);
     }
 }
 
@@ -56,22 +75,20 @@ pub struct Account {
     pub port: i64,
     pub username: String,
     pub password: String,
-    pub collection_id: Option<i64>,
 }
 
 pub async fn load_account(st: &AppState, id: i64) -> Result<Option<Account>> {
-    let row: Option<(i64, String, i64, String, String, Option<i64>)> = sqlx::query_as(
-        "SELECT id, host, port, username, password, collection_id FROM mail_accounts WHERE id = ?",
+    let row: Option<(i64, String, i64, String, String)> = sqlx::query_as(
+        "SELECT id, host, port, username, password FROM mail_accounts WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&st.pool)
     .await?;
-    Ok(row.map(|(_, host, port, username, password, collection_id)| Account {
+    Ok(row.map(|(_, host, port, username, password)| Account {
         host,
         port,
         username,
         password,
-        collection_id,
     }))
 }
 
@@ -148,7 +165,6 @@ struct Folder {
     id: i64,
     name: String,
     mode: String,
-    collection_id: Option<i64>,
     uid_validity: Option<i64>,
     last_uid: i64,
     last_seq: i64,
@@ -183,8 +199,8 @@ pub async fn run(st: &AppState, account_id: i64) -> Result<usize> {
 
 async fn run_inner(st: &AppState, account_id: i64) -> Result<usize> {
     let a = load_account(st, account_id).await?.context("Postfach nicht gefunden")?;
-    let rows: Vec<(i64, String, String, Option<i64>, Option<i64>, i64, i64)> = sqlx::query_as(
-        "SELECT id, name, mode, collection_id, uid_validity, last_uid, last_seq FROM mail_folders \
+    let rows: Vec<(i64, String, String, Option<i64>, i64, i64)> = sqlx::query_as(
+        "SELECT id, name, mode, uid_validity, last_uid, last_seq FROM mail_folders \
          WHERE account_id = ? ORDER BY mode = 'replies', id",
     )
     .bind(account_id)
@@ -195,21 +211,30 @@ async fn run_inner(st: &AppState, account_id: i64) -> Result<usize> {
     }
     let folders: Vec<Folder> = rows
         .into_iter()
-        .map(|(id, name, mode, collection_id, uid_validity, last_uid, last_seq)| Folder {
+        .map(|(id, name, mode, uid_validity, last_uid, last_seq)| Folder {
             id,
             name,
             mode,
-            collection_id,
             uid_validity,
             last_uid,
             last_seq,
         })
         .collect();
+    set_progress(account_id, |p| p.phase = "Verbinden …".into());
     let mut s = connect(&a).await?;
     let mut known = crate::email::known_ids(st).await?;
     let mut imported = 0;
-    for f in &folders {
-        match folder(st, &mut s, &a, f, &mut known).await {
+    let count = folders.len() as i64;
+    for (i, f) in folders.iter().enumerate() {
+        set_progress(account_id, |p| {
+            p.folder = shared::imap_folder_label(&f.name);
+            p.folder_index = i as i64 + 1;
+            p.folder_count = count;
+            p.phase = "Ordner öffnen …".into();
+            p.done = 0;
+            p.total = 0;
+        });
+        match folder(st, &mut s, account_id, f, &mut known).await {
             Ok(n) => imported += n,
             Err(e) => {
                 let _ = s.logout().await;
@@ -224,7 +249,7 @@ async fn run_inner(st: &AppState, account_id: i64) -> Result<usize> {
     Ok(imported)
 }
 
-async fn folder(st: &AppState, s: &mut Session, a: &Account, f: &Folder, known: &mut HashSet<String>) -> Result<usize> {
+async fn folder(st: &AppState, s: &mut Session, account: i64, f: &Folder, known: &mut HashSet<String>) -> Result<usize> {
     let mb = s.examine(&f.name).await?;
     let validity = mb.uid_validity.map(i64::from);
     let mut last_uid = f.last_uid;
@@ -232,8 +257,8 @@ async fn folder(st: &AppState, s: &mut Session, a: &Account, f: &Folder, known: 
         // Ordner neu angelegt oder umnummeriert: von vorn (Duplikate werden erkannt)
         last_uid = 0;
     }
-    let collection = f.collection_id.or(a.collection_id);
     let mut imported = 0;
+    let ctx = ImportCtx { account, folder: f.id, count: f.mode != "replies" };
 
     // Neue Mails seit dem letzten Abruf
     let mut uids: Vec<u32> = s
@@ -243,6 +268,10 @@ async fn folder(st: &AppState, s: &mut Session, a: &Account, f: &Folder, known: 
         .filter(|u| i64::from(*u) > last_uid)
         .collect();
     uids.sort_unstable();
+    set_progress(account, |p| {
+        p.phase = if f.mode == "replies" { "Antworten suchen".into() } else { "Mails übernehmen".into() };
+        p.total = uids.len() as i64;
+    });
     for chunk in uids.chunks(50) {
         let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let wanted: Vec<u32> = if f.mode == "replies" {
@@ -268,7 +297,11 @@ async fn folder(st: &AppState, s: &mut Session, a: &Account, f: &Folder, known: 
         } else {
             chunk.to_vec()
         };
-        imported += fetch_and_import(st, s, &wanted, collection, known).await?;
+        imported += fetch_and_import(st, s, &wanted, &ctx, known).await?;
+        if f.mode == "replies" {
+            // Bei „alle Mails“ zählt fetch_and_import selbst mit
+            set_progress(account, |p| p.done += chunk.len() as i64);
+        }
         last_uid = last_uid.max(chunk.iter().copied().map(i64::from).max().unwrap_or(0));
         save_state(st, f.id, validity, last_uid, None).await?;
     }
@@ -282,6 +315,11 @@ async fn folder(st: &AppState, s: &mut Session, a: &Account, f: &Folder, known: 
         .fetch_all(&st.pool)
         .await?;
         let max_seq = rows.last().map(|r| r.0).unwrap_or(f.last_seq);
+        set_progress(account, |p| {
+            p.phase = "Ältere Antworten nachsuchen".into();
+            p.done = 0;
+            p.total = rows.len() as i64;
+        });
         for chunk in rows.chunks(10) {
             // OR-Kette: (OR (OR a b) c) …
             let mut q = String::new();
@@ -293,8 +331,9 @@ async fn folder(st: &AppState, s: &mut Session, a: &Account, f: &Folder, known: 
             let mut hits: Vec<u32> = s.uid_search(&q).await?.into_iter().collect();
             hits.sort_unstable();
             if !hits.is_empty() {
-                imported += fetch_and_import(st, s, &hits, collection, known).await?;
+                imported += fetch_and_import(st, s, &hits, &ctx, known).await?;
             }
+            set_progress(account, |p| p.done += chunk.len() as i64);
         }
         save_state(st, f.id, validity, last_uid, Some(max_seq)).await?;
     }
@@ -316,7 +355,7 @@ async fn fetch_and_import(
     st: &AppState,
     s: &mut Session,
     uids: &[u32],
-    collection: Option<i64>,
+    ctx: &ImportCtx,
     known: &mut HashSet<String>,
 ) -> Result<usize> {
     let mut n = 0;
@@ -324,9 +363,13 @@ async fn fetch_and_import(
         let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let msgs: Vec<_> = s.uid_fetch(&set, "(UID BODY.PEEK[])").await?.try_collect().await?;
         for m in &msgs {
+            if ctx.count {
+                set_progress(ctx.account, |p| p.done += 1);
+            }
             let Some(raw) = m.body() else { continue };
-            if import(st, raw, collection, known).await? {
+            if import(st, raw, ctx, known).await? {
                 n += 1;
+                set_progress(ctx.account, |p| p.imported += 1);
             }
         }
     }
@@ -334,7 +377,27 @@ async fn fetch_and_import(
 }
 
 /// Eine Mail als `.eml`-Dokument ablegen; `false`, wenn sie schon da ist
-async fn import(st: &AppState, raw: &[u8], collection: Option<i64>, known: &mut HashSet<String>) -> Result<bool> {
+/// Wohin übernommene Mails gehen (bei jeder Mail neu gelesen, damit eine
+/// Änderung während eines laufenden Abrufs sofort gilt)
+struct ImportCtx {
+    account: i64,
+    folder: i64,
+    /// Jede geladene Mail im Fortschritt mitzählen
+    count: bool,
+}
+
+async fn target_collection(st: &AppState, ctx: &ImportCtx) -> Result<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT COALESCE(f.collection_id, a.collection_id) FROM mail_folders f \
+         JOIN mail_accounts a ON a.id = f.account_id WHERE f.id = ?",
+    )
+    .bind(ctx.folder)
+    .fetch_optional(&st.pool)
+    .await?
+    .flatten())
+}
+
+async fn import(st: &AppState, raw: &[u8], ctx: &ImportCtx, known: &mut HashSet<String>) -> Result<bool> {
     let (mid, _) = crate::email::header_ids(raw);
     let exists: Option<i64> = match &mid {
         Some(m) => sqlx::query_scalar("SELECT document_id FROM emails WHERE message_id = ? LIMIT 1")
@@ -360,6 +423,7 @@ async fn import(st: &AppState, raw: &[u8], collection: Option<i64>, known: &mut 
     let data = raw.to_vec();
     let stream = futures_util::stream::once(async move { Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(data)) });
     let staged = st.storage.stage(Box::pin(stream), st.config.max_upload_bytes).await?;
+    let collection = target_collection(st, ctx).await?;
     let form = crate::api::documents::UploadForm {
         uploads: vec![crate::api::documents::Upload { staged, filename, mime: "message/rfc822".into() }],
         collections: collection.into_iter().collect(),

@@ -612,3 +612,8 @@ button.danger-solid:hover { filter: brightness(1.08); border-color: var(--danger
 .mail-folders li.active { background: var(--accent-soft); }
 .mail-folders select { max-width: 34%; font-size: 13px; }
 .mail-folders li > span.grow { min-width: 90px; }
+.mail-progress { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.progress { height: 6px; border-radius: 3px; background: var(--accent-soft); overflow: hidden; position: relative; }
+.progress-bar { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s ease; }
+.progress.indeterminate .progress-bar { width: 30% !important; position: absolute; animation: progress-slide 1.2s ease-in-out infinite; }
+@keyframes progress-slide { from { left: -30%; } to { left: 100%; } }
