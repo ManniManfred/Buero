@@ -340,6 +340,9 @@ impl LocalFs for WinLocal {
         let now = FileTime::now();
         PlaceholderCreateInfo::new(name)
             .metadata(Metadata::directory().created(now).written(now).changed(now).accessed(now))
+            // Der Abgleich legt alle Einträge selbst an (PopulationType::AlwaysFull);
+            // ohne dieses Flag lehnt Windows den Ordner ab (0x8007017C).
+            .has_no_children()
             .mark_in_sync()
             .blob(meta.to_blob())
             .create(parent)
