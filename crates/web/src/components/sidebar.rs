@@ -144,6 +144,17 @@ pub fn Sidebar() -> impl IntoView {
         }
     });
 
+    // Smartphone: nach einer Auswahl das Menü schließen
+    Effect::new(move |prev: Option<()>| {
+        c.collection.track();
+        c.unfiled.track();
+        c.dashboard.track();
+        c.kind.track();
+        if prev.is_some() {
+            c.sidebar_open.set(false);
+        }
+    });
+
     let select_all = move |_| {
         c.collection.set(None);
         c.unfiled.set(false);
@@ -157,10 +168,17 @@ pub fn Sidebar() -> impl IntoView {
     };
 
     view! {
-        <aside class="sidebar">
+        <Show when=move || c.sidebar_open.get()>
+            <div class="sidebar-backdrop" on:click=move |_| c.sidebar_open.set(false)></div>
+        </Show>
+        <aside class="sidebar" class:open=move || c.sidebar_open.get()>
             <div class="brand">
                 <span class="brand-name"><Icon name="logo" class="brand-logo" />"Büro"<span class="brand-version" title="Version">{crate::util::version()}</span></span>
-                <button class="icon" title="Einstellungen" on:click=move |_| c.show_settings.set(true)><Icon name="settings" /></button>
+                <span class="brand-actions">
+                    <button class="icon" title="Einstellungen" on:click=move |_| c.show_settings.set(true)><Icon name="settings" /></button>
+                    <button class="icon mobile-only" title="Menü schließen" aria-label="Menü schließen"
+                        on:click=move |_| c.sidebar_open.set(false)><Icon name="x" /></button>
+                </span>
             </div>
             <nav>
                 <div class="nav-item" class:active=move || c.dashboard.get() on:click=move |_| c.dashboard.set(true)

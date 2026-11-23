@@ -50,6 +50,10 @@ pub fn DashboardView() -> impl IntoView {
     view! {
         <div class="dashboard">
             <div class="dashboard-head">
+                <button class="icon mobile-only" title="Sammlungen und Filter" aria-label="Sammlungen und Filter"
+                    on:click=move |_| c.sidebar_open.set(true)>
+                    <Icon name="menu" />
+                </button>
                 <button class="icon mobile-only" title="Zu den Dokumenten" aria-label="Zu den Dokumenten"
                     on:click=move |_| c.dashboard.set(false)>
                     <Icon name="search" />

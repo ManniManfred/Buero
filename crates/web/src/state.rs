@@ -76,6 +76,8 @@ pub struct Ctx {
     pub editor_title: RwSignal<String>,
     /// Dokumentenscanner (Kamera) geöffnet
     pub scan: RwSignal<bool>,
+    /// Smartphone: Seitenleiste (Sammlungen, Tags, …) als Menü eingeblendet
+    pub sidebar_open: RwSignal<bool>,
 }
 
 pub const PAGE: usize = 50;
@@ -117,6 +119,7 @@ impl Ctx {
             text_doc: RwSignal::new(None),
             editor_title: RwSignal::new(String::new()),
             scan: RwSignal::new(false),
+            sidebar_open: RwSignal::new(false),
         }
     }
 

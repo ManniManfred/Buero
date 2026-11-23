@@ -29,8 +29,9 @@ pub fn SearchRow() -> impl IntoView {
     let search_input = NodeRef::<leptos::html::Input>::new();
 
     view! {
-            <button class="icon mobile-only" title="Übersicht" aria-label="Übersicht" on:click=move |_| c.dashboard.set(true)>
-                <Icon name="dashboard" />
+            <button class="icon mobile-only" title="Sammlungen und Filter" aria-label="Sammlungen und Filter"
+                on:click=move |_| c.sidebar_open.set(true)>
+                <Icon name="menu" />
             </button>
             <div class="search">
                 <Icon name="search" class="search-icon" />

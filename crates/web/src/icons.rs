@@ -25,6 +25,7 @@ fn body(name: &str) -> String {
         "pencil" => r#"<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>"#,
         "minimize" => r#"<path d="M5 12h14"/>"#,
         "maximize" => r#"<rect width="14" height="14" x="5" y="5" rx="1"/>"#,
+        "menu" => r#"<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>"#,
         "x" => r#"<path d="M18 6 6 18"/><path d="m6 6 12 12"/>"#,
         "check" => r#"<path d="M20 6 9 17l-5-5"/>"#,
         "search" => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>"#,
