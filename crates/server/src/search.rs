@@ -20,12 +20,12 @@ use tantivy::schema::{
 };
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{
-    AsciiFoldingFilter, Language, LowerCaser, RemoveLongFilter, SimpleTokenizer, Stemmer,
-    TextAnalyzer,
+    AsciiFoldingFilter, Language, LowerCaser, RemoveLongFilter, Stemmer,
+    TextAnalyzer, Token, TokenStream, Tokenizer,
 };
 use tantivy::{DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term};
 
-const SCHEMA_VERSION: &str = "5";
+const SCHEMA_VERSION: &str = "6";
 const TOKENIZER: &str = "de_stem";
 
 #[derive(Clone, Copy)]
@@ -130,7 +130,7 @@ fn schema() -> (Schema, Fields) {
 }
 
 fn analyzer() -> TextAnalyzer {
-    TextAnalyzer::builder(SimpleTokenizer::default())
+    TextAnalyzer::builder(WordTokenizer::default())
         .filter(RemoveLongFilter::limit(48))
         .filter(LowerCaser)
         .filter(AsciiFoldingFilter)
@@ -230,7 +230,11 @@ impl SearchIndex {
         let mut stream = a.token_stream(text);
         let mut out = Vec::new();
         while stream.advance() {
-            out.push(stream.token().text.clone());
+            // Zusammengeschriebene Wörter über ihre Teile suchen: findet
+            // dann auch getrennt geschriebene
+            if stream.token().position_length <= 1 {
+                out.push(stream.token().text.clone());
+            }
         }
         out
     }
@@ -460,6 +464,105 @@ impl SearchIndex {
     }
 }
 
+/// Zerlegt Text in Wörter (wie `SimpleTokenizer`) und zusätzlich
+/// zusammengeschriebene Wörter in ihre Teile: `VersiegelteFlaechen` →
+/// `versiegelte`, `flaechen` (plus das ganze Wort an derselben Position,
+/// mit `position_length` = Anzahl der Teile), ebenso `Rechnung2024` und
+/// `PDFDatei`. Umschreibungen ae/oe/ue werden wie ä/ö/ü behandelt.
+#[derive(Clone, Default)]
+pub struct WordTokenizer {
+    tokens: Vec<Token>,
+}
+
+pub struct WordTokenStream<'a> {
+    tokens: &'a mut Vec<Token>,
+    next: usize,
+}
+
+impl Tokenizer for WordTokenizer {
+    type TokenStream<'a> = WordTokenStream<'a>;
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> WordTokenStream<'a> {
+        self.tokens.clear();
+        let mut pos = 0;
+        let push = |tokens: &mut Vec<Token>, from: usize, to: usize, position: usize, len: usize| {
+            tokens.push(Token {
+                offset_from: from,
+                offset_to: to,
+                position,
+                text: digraphs(&text[from..to].to_lowercase()),
+                position_length: len,
+            });
+        };
+        for (from, word) in text.split_word_bound_indices() {
+            if !word.starts_with(char::is_alphanumeric) {
+                continue;
+            }
+            let parts = word_parts(word);
+            if parts.len() > 1 {
+                push(&mut self.tokens, from, from + word.len(), pos, parts.len());
+                for (a, b) in &parts {
+                    push(&mut self.tokens, from + a, from + b, pos, 1);
+                    pos += 1;
+                }
+            } else {
+                push(&mut self.tokens, from, from + word.len(), pos, 1);
+                pos += 1;
+            }
+        }
+        WordTokenStream { tokens: &mut self.tokens, next: 0 }
+    }
+}
+
+impl TokenStream for WordTokenStream<'_> {
+    fn advance(&mut self) -> bool {
+        self.next += 1;
+        self.next <= self.tokens.len()
+    }
+    fn token(&self) -> &Token {
+        &self.tokens[self.next - 1]
+    }
+    fn token_mut(&mut self) -> &mut Token {
+        &mut self.tokens[self.next - 1]
+    }
+}
+
+/// Teile eines Wortes als Byte-Bereiche: Grenzen bei klein→Groß,
+/// GROSS→Groß+klein (`PDFDatei`) und zwischen Buchstaben und Ziffern
+fn word_parts(word: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<(usize, char)> = word.char_indices().collect();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for i in 1..chars.len() {
+        let (p, c) = (chars[i - 1].1, chars[i].1);
+        let next_lower = chars.get(i + 1).is_some_and(|n| n.1.is_lowercase());
+        let cut = (p.is_lowercase() && c.is_uppercase())
+            || (p.is_uppercase() && c.is_uppercase() && next_lower)
+            || (p.is_alphabetic() && c.is_numeric())
+            || (p.is_numeric() && c.is_alphabetic());
+        if cut {
+            parts.push((start, chars[i].0));
+            start = chars[i].0;
+        }
+    }
+    parts.push((start, word.len()));
+    parts
+}
+
+/// ae/oe/ue → a/o/u (nicht „que“), passend zu ä/ö/ü nach der ASCII-Faltung
+fn digraphs(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev: Option<char> = None;
+    for c in s.chars() {
+        if c == 'e' && matches!(prev, Some('a' | 'o')) || c == 'e' && prev == Some('u') && !out.ends_with("qu") {
+            prev = None;
+            continue;
+        }
+        out.push(c);
+        prev = Some(c);
+    }
+    out
+}
+
 fn fold(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars().flat_map(char::to_lowercase) {
@@ -473,7 +576,7 @@ fn fold(s: &str) -> String {
             _ => out.push(c),
         }
     }
-    out
+    digraphs(&out)
 }
 
 fn escape(s: &str) -> String {
@@ -561,5 +664,74 @@ mod tests {
         let s = fallback_snippet("Sehr geehrte Versicherung, hallo", &["vers".into()]).unwrap();
         assert_eq!(s, "Sehr geehrte <b>Versicherung</b>, hallo");
         assert!(fallback_snippet("abc", &["xyz".into()]).is_none());
+    }
+
+    #[test]
+    fn parts() {
+        let p = |w: &str| word_parts(w).into_iter().map(|(a, b)| w[a..b].to_string()).collect::<Vec<_>>();
+        assert_eq!(p("VersiegelteFlaechen"), ["Versiegelte", "Flaechen"]);
+        assert_eq!(p("PDFDatei"), ["PDF", "Datei"]);
+        assert_eq!(p("Rechnung2024"), ["Rechnung", "2024"]);
+        assert_eq!(p("Haus"), ["Haus"]);
+        assert_eq!(digraphs("flaechen"), "flachen");
+        assert_eq!(digraphs("quelle"), "quelle");
+        assert_eq!(fold("Flächen"), fold("Flaechen"));
+    }
+
+    fn doc(id: i64, title: &str) -> IndexDoc {
+        IndexDoc {
+            id,
+            title: title.into(),
+            filename: String::new(),
+            description: String::new(),
+            content: String::new(),
+            tag_names: vec![],
+            collection_names: vec![],
+            collection_ids: vec![],
+            direct_collection_ids: vec![],
+            is_child: false,
+            tag_ids: vec![],
+            kind: "pdf".into(),
+            created: 0,
+            date: 0,
+        }
+    }
+
+    #[test]
+    fn compounds_and_umlauts() {
+        let dir = std::env::temp_dir().join(format!("buero-search-{}", rand::random::<u64>()));
+        let (idx, _) = SearchIndex::open(&dir).unwrap();
+        idx.upsert(&[doc(1, "VersiegelteFlaechen"), doc(2, "Versiegelte Flächen 2024"), doc(3, "Gartenhaus")]).unwrap();
+        idx.commit().unwrap();
+        let find = |t: &str| {
+            let mut ids: Vec<i64> = idx
+                .search(&Query_ {
+                    text: t.into(),
+                    collections: vec![],
+                    direct: false,
+                    hide_children: false,
+                    tags: vec![],
+                    kind: String::new(),
+                    unfiled: false,
+                    exclude_collections: vec![],
+                    sort: String::new(),
+                    offset: 0,
+                    limit: 10,
+                })
+                .unwrap()
+                .ids
+                .into_iter()
+                .map(|x| x.0)
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(find("versiegelte flaechen"), [1, 2]);
+        assert_eq!(find("versiegelte flächen"), [1, 2]);
+        assert_eq!(find("VersiegelteFlächen"), [1, 2]);
+        assert_eq!(find("versiegelteflaechen"), [1]);
+        assert_eq!(find("\"versiegelte flaechen\""), [1, 2]);
+        assert_eq!(find("flaech"), [1, 2]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

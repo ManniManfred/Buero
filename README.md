@@ -35,7 +35,8 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
   - Markdown, Text, CSV, HTML, RTF, JSON, …
 - **Suche** (Tantivy, typischerweise wenige Millisekunden):
   - Suche während der Eingabe (letztes Wort als Wortanfang)
-  - Deutsche Wortstämme (`Rechnungen` findet `Rechnung`), Umlaute egal (`kundigung` = `Kündigung`)
+  - Deutsche Wortstämme (`Rechnungen` findet `Rechnung`), Umlaute egal (`kundigung` = `Kündigung`, `kuendigung` = `Kündigung`)
+  - Zusammengeschriebene Namen werden zerlegt: `versiegelte flächen` findet `VersiegelteFlaechen`, `rechnung 2024` findet `Rechnung2024`
   - Automatisch tippfehlertolerant, wenn es keine exakten Treffer gibt
   - Phrasen `"kaution 1500"`, Ausschluss `-kfz`, `OR`, Feldsuche `title:`, `tags:`, `filename:`, `content:`
   - Treffer-Ausschnitte mit Hervorhebung
