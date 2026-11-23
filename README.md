@@ -19,6 +19,10 @@ Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crat
 
 - **Upload** per Drag & Drop (ins ganze Fenster) oder Dateiauswahl, mehrere
   Dateien parallel. Ist links eine Sammlung gewählt, landen Uploads direkt darin.
+  **Ordner** (auch im Desktop-Client) werden zu Sammlungen, Unterordner zu
+  Untersammlungen – in der gewählten Sammlung bzw. ganz oben; gibt es dort schon
+  eine Sammlung gleichen Namens, wird sie weiterverwendet. Versteckte Dateien
+  (`.DS_Store`, `Thumbs.db`, …) bleiben außen vor.
   Doppelte Dateien werden am SHA-256-Hash erkannt und nicht doppelt gespeichert.
 - **Neue Dokumente** (Knopf „Neu“): leeres Word-Dokument, Excel-Tabelle,
   PowerPoint-Präsentation (16:9), Textdatei oder Markdown-Datei anlegen – in der

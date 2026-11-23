@@ -6,6 +6,46 @@
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = r#"
+// Abgelegte Dateien samt Ordnern einlesen. Die Einträge müssen noch während des
+// drop-Ereignisses geholt werden; das Durchlaufen der Ordner geht danach.
+// Ergebnis: null ohne Ordner, sonst Liste von { path: ["Ordner", "Unter", "datei.pdf"], file } –
+// Ordner ohne Datei als { path: [...], file: null }.
+export function drop_entries(dt) {
+  const items = dt && dt.items ? Array.from(dt.items) : [];
+  const entries = items
+    .filter((i) => i.kind === "file")
+    .map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null))
+    .filter((e) => e);
+  if (!entries.some((e) => e.isDirectory)) return Promise.resolve(null);
+  const skip = (n) => n.startsWith(".") || /^(thumbs\.db|desktop\.ini)$/i.test(n);
+  const out = [];
+  const readAll = (reader) => new Promise((resolve, reject) => {
+    const all = [];
+    const next = () => reader.readEntries((batch) => {
+      if (!batch.length) return resolve(all);
+      all.push(...batch);
+      next();
+    }, reject);
+    next();
+  });
+  const walk = async (entry, parent) => {
+    if (skip(entry.name)) return;
+    const path = parent.concat([entry.name]);
+    if (entry.isDirectory) {
+      out.push({ path, file: null });
+      const children = await readAll(entry.createReader());
+      for (const c of children) await walk(c, path);
+    } else {
+      const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+      out.push({ path, file });
+    }
+  };
+  return (async () => {
+    for (const e of entries) await walk(e, []);
+    return out;
+  })();
+}
+
 export function copy_text(t) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     return navigator.clipboard.writeText(t).then(() => true, () => false);
@@ -82,6 +122,7 @@ export function office_close() {
 "#)]
 extern "C" {
     fn copy_text(t: &str) -> js_sys::Promise;
+    pub fn drop_entries(dt: &web_sys::DataTransfer) -> js_sys::Promise;
     pub fn office_open(script_url: &str, element_id: &str, config_json: &str, on_event: &js_sys::Function);
     pub fn office_close();
     pub fn tupfer_listen(frame_id: &str, on_event: &js_sys::Function);

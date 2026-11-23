@@ -3,7 +3,10 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use shared::UploadResult;
+use std::collections::HashMap;
+
+use shared::{Collection, CollectionInput, UploadResult};
+use wasm_bindgen::JsCast;
 
 use crate::icons::Icon;
 use crate::state::{ctx, Ctx, UploadItem};
@@ -16,26 +19,32 @@ pub fn pick_files(list: Option<web_sys::FileList>) -> Vec<web_sys::File> {
 /// Lädt Dateien hoch (max. 3 gleichzeitig). Ist eine Sammlung ausgewählt,
 /// landen die Dokumente direkt darin.
 pub fn start_uploads(c: Ctx, files: Vec<web_sys::File>) {
+    let target = c.collection.get_untracked();
+    start_uploads_to(c, files.into_iter().map(|f| (f.name(), f, target)).collect());
+}
+
+/// Lädt Dateien hoch, jede in ihre Sammlung: (angezeigter Name, Datei, Sammlung)
+fn start_uploads_to(c: Ctx, files: Vec<(String, web_sys::File, Option<i64>)>) {
     if files.is_empty() {
         return;
     }
-    let target = c.collection.get_untracked();
     let base_key = c.uploads.with_untracked(|u| u.iter().map(|x| x.key).max().unwrap_or(0)) + 1;
-    let jobs: Vec<(u32, web_sys::File)> =
-        files.into_iter().enumerate().map(|(i, f)| (base_key + i as u32, f)).collect();
     c.uploads.update(|u| {
         u.retain(|x| x.status == "uploading" || x.status == "waiting");
-        for (key, f) in &jobs {
-            u.push(UploadItem { key: *key, name: f.name(), status: "waiting".into(), message: String::new(), doc_id: None });
+        for (i, (name, _, _)) in files.iter().enumerate() {
+            let key = base_key + i as u32;
+            u.push(UploadItem { key, name: name.clone(), status: "waiting".into(), message: String::new(), doc_id: None });
         }
     });
+    let jobs: Vec<(u32, web_sys::File, Option<i64>)> =
+        files.into_iter().enumerate().map(|(i, (_, f, t))| (base_key + i as u32, f, t)).collect();
     let queue = std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::from(jobs)));
     for _ in 0..3 {
         let queue = queue.clone();
         spawn_local(async move {
             loop {
                 let next = queue.borrow_mut().pop_front();
-                let Some((key, file)) = next else { break };
+                let Some((key, file, target)) = next else { break };
                 set_status(c, key, "uploading", "", None);
                 let form = web_sys::FormData::new().unwrap();
                 if let Some(t) = target {
@@ -61,6 +70,94 @@ pub fn start_uploads(c: Ctx, files: Vec<web_sys::File>) {
             c.reload();
         });
     }
+}
+
+/// Abgelegter Eintrag: Pfad (Ordner/…/Name) und Datei (`None`: Ordner)
+type DropEntry = (Vec<String>, Option<web_sys::File>);
+
+fn parse_entries(v: &wasm_bindgen::JsValue) -> Vec<DropEntry> {
+    let Some(arr) = v.dyn_ref::<js_sys::Array>() else { return Vec::new() };
+    arr.iter()
+        .filter_map(|o| {
+            let path = js_sys::Reflect::get(&o, &"path".into()).ok()?;
+            let path: Vec<String> = path.dyn_ref::<js_sys::Array>()?.iter().filter_map(|p| p.as_string()).collect();
+            let file = js_sys::Reflect::get(&o, &"file".into()).ok().and_then(|f| f.dyn_into::<web_sys::File>().ok());
+            (!path.is_empty()).then_some((path, file))
+        })
+        .collect()
+}
+
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
+/// Ordner abgelegt: Ordner werden Sammlungen (in der gewählten Sammlung bzw.
+/// ganz oben), Unterordner Untersammlungen; vorhandene gleichnamige Sammlungen
+/// werden weiterverwendet. Danach die Dateien in ihre Sammlung hochladen.
+async fn upload_folders(c: Ctx, entries: Vec<DropEntry>) {
+    let base = c.collection.get_untracked();
+    let mut known: Vec<Collection> = c.collections.get_untracked();
+    let mut dirs: Vec<&Vec<String>> = entries.iter().filter(|(_, f)| f.is_none()).map(|(p, _)| p).collect();
+    dirs.sort_by_key(|p| p.len());
+    let mut target: HashMap<Vec<String>, i64> = HashMap::new();
+    let mut created = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+    for dir in dirs {
+        let name = dir.last().cloned().unwrap_or_default();
+        let parent = if dir.len() == 1 {
+            base
+        } else {
+            match target.get(&dir[..dir.len() - 1]) {
+                Some(p) => Some(*p),
+                None => continue, // übergeordneter Ordner fehlgeschlagen
+            }
+        };
+        let find = |list: &[Collection]| list.iter().find(|x| x.parent_id == parent && same_name(&x.name, &name)).map(|x| x.id);
+        let id = match find(&known) {
+            Some(id) => Some(id),
+            None => {
+                let input = CollectionInput { name: Some(name.trim().to_string()), parent_id: Some(parent.unwrap_or(0)), color: None, ai_locked: None };
+                match c.api.send::<_, Collection>("POST", "/api/collections", &input).await {
+                    Ok(col) => {
+                        created += 1;
+                        let id = col.id;
+                        known.push(col);
+                        Some(id)
+                    }
+                    Err(e) => {
+                        // Evtl. inzwischen angelegt: Liste neu holen
+                        if let Ok(v) = c.api.get::<Vec<Collection>>("/api/collections").await {
+                            known = v;
+                        }
+                        let id = find(&known);
+                        if id.is_none() {
+                            failed.push(format!("{name}: {e}"));
+                        }
+                        id
+                    }
+                }
+            }
+        };
+        if let Some(id) = id {
+            target.insert(dir.clone(), id);
+        }
+    }
+    if created > 0 {
+        c.notify(format!("{created} Sammlung(en) angelegt"), false);
+    }
+    if !failed.is_empty() {
+        c.notify(format!("Sammlung anlegen: {}", failed.join(", ")), true);
+    }
+    c.load_meta();
+    let files: Vec<(String, web_sys::File, Option<i64>)> = entries
+        .into_iter()
+        .filter_map(|(path, file)| {
+            let file = file?;
+            let coll = if path.len() == 1 { base } else { Some(*target.get(&path[..path.len() - 1])?) };
+            Some((path.join("/"), file, coll))
+        })
+        .collect();
+    start_uploads_to(c, files);
 }
 
 fn set_status(c: Ctx, key: u32, status: &str, msg: &str, doc: Option<i64>) {
@@ -128,19 +225,28 @@ pub fn DropOverlay() -> impl IntoView {
         active.set(false);
         if has_files(&ev) {
             ev.prevent_default();
-            let files = pick_files(ev.data_transfer().and_then(|d| d.files()));
-            start_uploads(c, files);
+            let Some(dt) = ev.data_transfer() else { return };
+            // Ordner? Die Einträge gibt es nur jetzt, während des Ereignisses
+            let entries = crate::js::drop_entries(&dt);
+            let files = pick_files(dt.files());
+            spawn_local(async move {
+                match wasm_bindgen_futures::JsFuture::from(entries).await {
+                    Ok(v) if !v.is_null() => upload_folders(c, parse_entries(&v)).await,
+                    _ => start_uploads(c, files),
+                }
+            });
         }
     });
     view! {
         <Show when=move || active.get()>
             <div class="drop-overlay">
                 <div>
-                    "Dateien hier ablegen"
+                    "Dateien oder Ordner hier ablegen"
                     <div class="small">{move || match c.collection.get() {
                         Some(id) => format!("→ in Sammlung „{}“", c.collection_name(id)),
                         None => "→ in den Eingang".to_string(),
                     }}</div>
+                    <div class="small">"Ordner werden zu Sammlungen"</div>
                 </div>
             </div>
         </Show>
