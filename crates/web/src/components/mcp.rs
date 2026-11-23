@@ -43,7 +43,7 @@ pub fn McpSection() -> impl IntoView {
             return;
         };
         let can_upload = window()
-            .confirm_with_message("Darf dieser Zugang auch Dokumente hochladen und Tags vergeben?\n(Löschen oder Ändern geht nie.) OK = ja, Abbrechen = nur lesen")
+            .confirm_with_message("Darf dieser Zugang auch Dokumente hochladen, Tags vergeben und in Sammlungen einordnen?\n(Löschen oder Ändern geht nie.) OK = ja, Abbrechen = nur lesen")
             .unwrap_or(false);
         spawn_local(async move {
             match c.api.send::<_, ApiTokenCreated>("POST", "/api/mcp/tokens", &ApiTokenInput { name, can_upload }).await {
@@ -98,7 +98,7 @@ pub fn McpSection() -> impl IntoView {
         <p class="muted small">
             "KI-Assistenten wie Claude können über "<code>{endpoint}</code>" Dokumente suchen und den erkannten Text lesen – "
             "nur mit einem Zugangsschlüssel von hier, normalerweise nur lesend. Schlüssel mit „Hochladen“ dürfen zusätzlich "
-            "Dokumente hochladen und Tags vergeben, aber nie löschen oder ändern. Gelesene Inhalte gehen an den Anbieter des Assistenten. "
+            "Dokumente hochladen, Tags vergeben und in Sammlungen einordnen, aber nie löschen oder ändern. Gelesene Inhalte gehen an den Anbieter des Assistenten. "
             "Sammlungen lassen sich über „Bearbeiten“ sperren; ihre Dokumente (samt Untersammlungen) liefert der Zugang nie aus."
         </p>
         <p class="small">
@@ -133,7 +133,7 @@ pub fn McpSection() -> impl IntoView {
                 <li>
                     <crate::icons::Icon name="lock" class="sm" />
                     <span class="grow">{t.name.clone()}</span>
-                    <label class="muted" title="Darf Dokumente hochladen und Tags vergeben">
+                    <label class="muted" title="Darf Dokumente hochladen, Tags vergeben und in Sammlungen einordnen">
                         <input type="checkbox" prop:checked=t.can_upload on:change={
                             let t = t.clone();
                             move |ev| set_upload(t.clone(), event_target_checked(&ev))

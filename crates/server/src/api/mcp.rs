@@ -8,8 +8,9 @@
 //!   Schlüssel gelten nirgends sonst.
 //! - Nur lesend – außer der Schlüssel darf ausdrücklich hochladen
 //!   (`can_upload`): dann zusätzlich Dokumente hochladen (`upload_document`,
-//!   `POST /mcp/upload`) und Tags vergeben (`add_tags`). Löschen oder Ändern
-//!   bestehender Dokumente geht nie.
+//!   `POST /mcp/upload`), Tags vergeben (`add_tags`) und Dokumente in
+//!   Sammlungen einordnen, die bei Bedarf angelegt werden (`add_to_collection`).
+//!   Löschen oder Ändern bestehender Dokumente und Sammlungen geht nie.
 //! - Dokumente aus gesperrten Sammlungen (samt Untersammlungen) werden nie
 //!   ausgeliefert, auch nicht als Suchtreffer; gesperrte Sammlungen selbst
 //!   tauchen nicht auf.
@@ -252,8 +253,9 @@ fn instructions(perm: Perm) -> String {
     if perm.can_upload {
         s.push_str(
             " Dieser Zugang darf außerdem Dokumente hochladen (upload_document, Datei als Base64; \
-             größere Dateien per multipart an POST /mcp/upload mit demselben Schlüssel) und \
-             Tags vergeben (add_tags). Löschen oder Ändern geht nicht.",
+             größere Dateien per multipart an POST /mcp/upload mit demselben Schlüssel), \
+             Tags vergeben (add_tags) und Dokumente in Sammlungen einordnen (add_to_collection, \
+             fehlende Sammlungen werden angelegt). Löschen oder Ändern geht nicht.",
         );
     } else {
         s.push_str(" Der Zugang ist nur lesend.");
@@ -356,6 +358,23 @@ fn tool_defs(perm: Perm) -> Value {
                 },
                 "required": ["document_ids", "tags"]
             },
+            "annotations": w.clone()
+        }));
+        arr.push(json!({
+            "name": "add_to_collection",
+            "title": "In Sammlung einordnen",
+            "description": "Dokumente einer Sammlung hinzufügen (bisherige Sammlungen bleiben). Die Sammlung \
+                per collection_id oder als Pfad von oben, z. B. [\"Musik\", \"Noten\"]; fehlende Sammlungen \
+                im Pfad werden angelegt. Ohne document_ids wird nur die Sammlung angelegt. Liefert die ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "document_ids": { "type": "array", "items": { "type": "integer" } },
+                    "collection_id": { "type": "integer" },
+                    "path": { "type": "array", "items": { "type": "string" },
+                              "description": "Namen von der obersten Sammlung abwärts" }
+                }
+            },
             "annotations": w
         }));
     }
@@ -365,11 +384,12 @@ fn tool_defs(perm: Perm) -> Value {
 async fn call_tool(st: &AppState, name: &str, args: &Value, perm: Perm) -> Result<String, String> {
     let lock = Lock::load(st).await.map_err(|e| e.message)?;
     let r = match name {
-        "upload_document" | "add_tags" if !perm.can_upload => {
+        "upload_document" | "add_tags" | "add_to_collection" if !perm.can_upload => {
             return Err("Dieser Zugangsschlüssel darf nicht hochladen".into())
         }
         "upload_document" => upload_document(st, &lock, args).await,
         "add_tags" => add_tags(st, &lock, args).await,
+        "add_to_collection" => add_to_collection(st, &lock, args).await,
         "search_documents" => search(st, &lock, args).await,
         "get_document" => get_document(st, &lock, args).await,
         "list_collections" => list_collections(st, &lock).await,
@@ -749,6 +769,89 @@ async fn add_tags(st: &AppState, lock: &Lock, args: &Value) -> Result<Value, Str
     }
     st.reindex(&docs).await.map_err(err)?;
     Ok(json!({ "documents": docs.len(), "tags": names }))
+}
+
+/// Sammlung über ihren Pfad finden oder (samt fehlender Elternsammlungen) anlegen
+async fn collection_by_path(st: &AppState, lock: &Lock, path: &[String]) -> Result<i64, String> {
+    let mut parent: Option<i64> = None;
+    for seg in path {
+        let name: String = seg.trim().chars().take(200).collect();
+        if name.is_empty() {
+            return Err("Leerer Name im Pfad".into());
+        }
+        sqlx::query(
+            "INSERT OR IGNORE INTO collections (parent_id, name, created_at) VALUES (?, ?, ?)",
+        )
+        .bind(parent)
+        .bind(&name)
+        .bind(now())
+        .execute(&st.pool)
+        .await
+        .map_err(err)?;
+        let id: i64 = sqlx::query_scalar("SELECT id FROM collections WHERE IFNULL(parent_id, 0) = ? AND name = ?")
+            .bind(parent.unwrap_or(0))
+            .bind(&name)
+            .fetch_one(&st.pool)
+            .await
+            .map_err(err)?;
+        if lock.all.contains(&id) {
+            return Err("Sammlung nicht gefunden".into());
+        }
+        parent = Some(id);
+    }
+    parent.ok_or_else(|| "Parameter collection_id oder path fehlt".to_string())
+}
+
+async fn add_to_collection(st: &AppState, lock: &Lock, args: &Value) -> Result<Value, String> {
+    let collection = match int(args, "collection_id") {
+        Some(c) => {
+            let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM collections WHERE id = ?")
+                .bind(c)
+                .fetch_optional(&st.pool)
+                .await
+                .map_err(err)?;
+            if exists.is_none() || lock.all.contains(&c) {
+                return Err("Sammlung nicht gefunden".into());
+            }
+            c
+        }
+        None => {
+            let path: Vec<String> = match args.get("path") {
+                Some(Value::String(s)) => s.split('/').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect(),
+                _ => string_list(args, "path"),
+            };
+            if path.len() > 32 {
+                return Err("Pfad zu tief".into());
+            }
+            collection_by_path(st, lock, &path).await?
+        }
+    };
+    let ids: Vec<i64> = match args.get("document_ids") {
+        Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_i64()).collect(),
+        _ => Vec::new(),
+    };
+    let docs: Vec<i64> = db::summaries(&st.pool, &ids)
+        .await
+        .map_err(err)?
+        .into_iter()
+        .filter(|d| !lock.blocks(&d.collection_ids))
+        .map(|d| d.id)
+        .collect();
+    let missing: Vec<i64> = ids.iter().copied().filter(|i| !docs.contains(i)).collect();
+    if !missing.is_empty() {
+        return Err(format!("Dokument(e) nicht gefunden: {missing:?}"));
+    }
+    for d in &docs {
+        sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) VALUES (?, ?)")
+            .bind(d)
+            .bind(collection)
+            .execute(&st.pool)
+            .await
+            .map_err(err)?;
+    }
+    st.reindex(&docs).await.map_err(err)?;
+    let tree = db::collection_tree(&st.pool).await.map_err(err)?;
+    Ok(json!({ "collection_id": collection, "path": paths(&tree, &[collection]).remove(0), "documents": docs.len() }))
 }
 
 /// `POST /mcp/upload`: Dateien per multipart hochladen (Felder wie bei
