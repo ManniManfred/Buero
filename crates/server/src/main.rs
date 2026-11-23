@@ -7,8 +7,10 @@ mod api;
 mod auth;
 mod config;
 mod db;
+mod email;
 mod error;
 mod extract;
+mod mail;
 mod search;
 mod security;
 mod sign;
@@ -94,6 +96,7 @@ async fn run(config: &config::Config) -> anyhow::Result<bool> {
         tracing::info!("Suchindex neu aufgebaut ({n} Dokumente)");
     }
     let worker = worker::spawn(state.clone(), rx);
+    mail::spawn(state.clone());
     worker::requeue_pending(&state).await?;
 
     let app = api::router(state.clone());

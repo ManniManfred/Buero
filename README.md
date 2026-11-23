@@ -51,6 +51,15 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
   - **Eingang**: alle Dokumente, die noch keiner Sammlung zugeordnet sind.
   - Zuordnen per Drag & Drop (Dokument auf Sammlung ziehen), im Detailbereich
     oder für viele Dokumente gleichzeitig (Mehrfachauswahl).
+- **E-Mails**: `.eml`-Dateien werden ausgelesen (Absender, Empfänger, Betreff,
+  Datum, Text); Anhänge werden eigene, mit der Mail verknüpfte Dokumente, und
+  zusammengehörige Mails erscheinen als **Konversation**. Mails lassen sich
+  per **IMAP** abrufen (Einstellungen → „E-Mails abrufen“, TLS/Port 993,
+  mehrere Postfächer): je Ordner „Alle Mails“ (z. B. ein eigener Ordner
+  „Büro“) oder „Nur Antworten“ (z. B. „Gesendet“ und Posteingang – nur Mails
+  zu Konversationen, die schon in Büro liegen; ältere Antworten werden
+  nachgesucht, wenn eine Konversation später dazukommt). Büro liest nur:
+  nichts wird verschoben oder als gelesen markiert.
 - **Versionen**: bearbeitete Dateien als neue Version hochladen; alte Versionen
   bleiben abrufbar.
 - **Freigaben**: Links zu einem Dokument oder einer ganzen Sammlung (inkl.

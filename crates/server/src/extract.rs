@@ -74,6 +74,11 @@ pub async fn extract(path: &Path, ext: &str, opts: &ExtractOptions) -> Result<Ex
         }
         "html" | "htm" => Extracted { text: strip_html(&read_text(path).await?), page_count: None },
         "rtf" => Extracted { text: strip_rtf(&read_text(path).await?), page_count: None },
+        "eml" => {
+            let raw = tokio::fs::read(path).await?;
+            let text = crate::email::parse(&raw).map(|p| crate::email::text(&p)).unwrap_or_default();
+            Extracted { text, page_count: None }
+        }
         _ => {
             if is_probably_text(path).await {
                 Extracted { text: read_text(path).await?, page_count: None }

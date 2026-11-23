@@ -19,6 +19,7 @@ mod auth;
 pub(crate) mod backup;
 mod collections;
 mod dashboard;
+mod mail;
 mod mcp;
 mod desktop;
 pub(crate) mod documents;
@@ -39,6 +40,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/documents/{id}/text", get(documents::text))
         .route("/api/documents/{id}/versions", post(documents::new_version))
         .route("/api/documents/{id}/reprocess", post(documents::reprocess))
+        .route("/api/documents/{id}/email", get(mail::email_info))
+        .route("/api/mail/accounts", get(mail::list).post(mail::create))
+        .route("/api/mail/accounts/{id}", axum::routing::patch(mail::update).delete(mail::delete))
+        .route("/api/mail/accounts/{id}/folders", post(mail::folders))
+        .route("/api/mail/accounts/{id}/run", post(mail::run))
         .route("/api/collections", get(collections::list).post(collections::create))
         .route(
             "/api/collections/{id}",

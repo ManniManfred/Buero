@@ -492,3 +492,148 @@ pub struct ApiTokenCreated {
     pub info: ApiToken,
     pub token: String,
 }
+
+// ---------------------------------------------------------------------------
+// E-Mail
+// ---------------------------------------------------------------------------
+
+/// Verweis auf eine E-Mail (z. B. in einer Konversation)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EmailRef {
+    pub id: i64,
+    pub subject: String,
+    pub sender: String,
+    /// Unix-Zeit
+    pub sent_at: Option<i64>,
+}
+
+/// E-Mail-Angaben zu einem Dokument: bei einer Mail Kopfdaten, Anhänge und
+/// Konversation; bei einem Anhang die Mails, an denen er hängt.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmailInfo {
+    pub email: Option<EmailHeader>,
+    #[serde(default)]
+    pub attachments: Vec<DocumentSummary>,
+    /// Alle Mails der Konversation in zeitlicher Reihenfolge (inkl. dieser)
+    #[serde(default)]
+    pub thread: Vec<EmailRef>,
+    /// Mails, an denen dieses Dokument als Anhang hängt
+    #[serde(default)]
+    pub attached_to: Vec<EmailRef>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EmailHeader {
+    pub subject: String,
+    pub sender: String,
+    pub recipients: String,
+    pub cc: String,
+    pub sent_at: Option<i64>,
+}
+
+/// IMAP-Postfach (das Passwort wird nie ausgeliefert)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MailAccount {
+    pub id: i64,
+    pub name: String,
+    pub host: String,
+    pub port: i64,
+    pub username: String,
+    pub has_password: bool,
+    pub enabled: bool,
+    pub interval_min: i64,
+    pub collection_id: Option<i64>,
+    pub last_run: Option<i64>,
+    pub last_error: Option<String>,
+    /// Beim letzten Abruf übernommene Mails
+    pub last_imported: i64,
+    pub running: bool,
+    pub folders: Vec<MailFolder>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MailFolder {
+    pub name: String,
+    /// "all" | "replies"
+    pub mode: String,
+    pub collection_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MailAccountInput {
+    pub name: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<i64>,
+    pub username: Option<String>,
+    /// Leer/fehlend = unverändert
+    pub password: Option<String>,
+    pub enabled: Option<bool>,
+    pub interval_min: Option<i64>,
+    /// 0 = keine
+    pub collection_id: Option<i64>,
+    /// Ersetzt die Ordnerliste
+    pub folders: Option<Vec<MailFolder>>,
+}
+
+/// Ordner auf dem Mailserver
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerFolder {
+    pub name: String,
+    /// "sent", "inbox", "drafts", "trash", "junk", "archive" oder ""
+    pub special: String,
+}
+
+/// IMAP-Ordnername (modifiziertes UTF-7, RFC 3501) lesbar machen: `B&APw-ro` → `Büro`
+pub fn imap_folder_label(name: &str) -> String {
+    fn b64(c: u8) -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b',' => 63,
+            _ => return None,
+        } as u32)
+    }
+    let mut out = String::new();
+    let mut rest = name;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        let Some(end) = after.find('-') else {
+            out.push_str(&rest[i..]);
+            return out;
+        };
+        let enc = &after[..end];
+        if enc.is_empty() {
+            out.push('&');
+        } else {
+            let (mut bits, mut n, mut units) = (0u32, 0u32, Vec::new());
+            for c in enc.bytes() {
+                let Some(v) = b64(c) else { return name.to_string() };
+                bits = (bits << 6) | v;
+                n += 6;
+                if n >= 16 {
+                    n -= 16;
+                    units.push(((bits >> n) & 0xffff) as u16);
+                }
+            }
+            out.push_str(&String::from_utf16_lossy(&units));
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn imap_utf7() {
+        assert_eq!(super::imap_folder_label("B&APw-ro"), "Büro");
+        assert_eq!(super::imap_folder_label("INBOX"), "INBOX");
+        assert_eq!(super::imap_folder_label("A&-B"), "A&B");
+        assert_eq!(super::imap_folder_label("Gel&APY-schte Elemente"), "Gelöschte Elemente");
+        assert_eq!(super::imap_folder_label("&ZeVnLIqe-"), "日本語");
+    }
+}

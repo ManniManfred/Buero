@@ -112,6 +112,11 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
     .execute(&state.pool)
     .await?;
 
+    if doc.extension.eq_ignore_ascii_case("eml") {
+        if let Err(e) = crate::email::register(state, id).await {
+            tracing::warn!("E-Mail {id} nicht vollständig erfasst: {e:#}");
+        }
+    }
     state.reindex(&[id]).await?;
     tracing::info!(
         "Dokument {id} verarbeitet ({} Zeichen) in {:.1?}",

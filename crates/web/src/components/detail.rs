@@ -147,6 +147,8 @@ fn DetailBody(
                 _ => {
                     if kind == "image" {
                         view! { <div class="preview img"><img src=file_url.clone() alt="" /></div> }.into_any()
+                    } else if kind == "email" {
+                        view! { <crate::components::email::EmailView id=id /> }.into_any()
                     } else if kind == "audio" {
                         view! {
                             <div class="preview media audio">
@@ -261,6 +263,7 @@ fn DetailBody(
                 })}
             </div>
         })}
+        <crate::components::email::AttachedTo id=id />
         <div class="tabs">
             <button class:active=move || tab.get() == "preview" on:click=move |_| tab.set("preview")>"Vorschau"</button>
             <button class:active=move || tab.get() == "text" on:click=move |_| tab.set("text")>

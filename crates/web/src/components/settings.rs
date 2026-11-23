@@ -45,6 +45,8 @@ pub fn Settings() -> impl IntoView {
                     c.share_target.set(Some(crate::state::ShareTarget::default()));
                 }><crate::icons::Icon name="link" />"Alle Freigaben verwalten"</button>
                 <hr />
+                <crate::components::mail::MailSection />
+                <hr />
                 <crate::components::mcp::McpSection />
                 <hr />
                 <h3>"Wartung"</h3>
