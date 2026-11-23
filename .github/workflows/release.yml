@@ -49,13 +49,11 @@ jobs:
         with:
           shared-key: desktop
           save-if: ${{ github.ref == 'refs/heads/master' }}
+      # crates/web/licenses.html ist eingecheckt und wird von Hand aktualisiert
+      # (siehe README, „Drittanbieter-Lizenzen“)
       - uses: taiki-e/install-action@v2
         with:
-          tool: trunk,tauri-cli,cargo-about
-      - name: Drittanbieter-Lizenzen aktualisieren
-        run: |
-          cargo fetch
-          cargo about generate --offline about.hbs -o crates/web/licenses.html
+          tool: trunk,tauri-cli
       # Version aus dem Tag; Update-Dateien (*.sig) nur mit Signaturschlüssel
       - name: Release-Konfiguration
         shell: bash
