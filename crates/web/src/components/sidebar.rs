@@ -12,6 +12,63 @@ use crate::icons::{Icon, KindIcon};
 use crate::state::{ctx, Ctx};
 
 pub const DRAG_MIME: &str = "application/x-buero-docs";
+/// Sammlung, die im Baum gezogen wird
+const COLL_MIME: &str = "application/x-buero-collection";
+
+thread_local! {
+    /// Gerade gezogene Sammlung (beim Überfahren ist der Inhalt des Drags nicht lesbar)
+    static DRAGGED: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
+
+fn has_type(ev: &web_sys::DragEvent, t: &str) -> bool {
+    ev.data_transfer().map(|d| d.types().includes(&t.into(), 0)).unwrap_or(false)
+}
+
+/// Darf die gezogene Sammlung nach `target` (`None`: ganz oben)?
+fn can_move_to(c: Ctx, target: Option<i64>) -> Option<i64> {
+    let dragged = DRAGGED.with(|d| d.get())?;
+    c.collections.with_untracked(|cs| {
+        let current_parent = cs.iter().find(|x| x.id == dragged)?.parent_id;
+        if current_parent == target {
+            return None;
+        }
+        // Nicht in sich selbst oder eine eigene Untersammlung
+        let mut cur = target;
+        let mut guard = 0;
+        while let Some(t) = cur {
+            if t == dragged || guard > 64 {
+                return None;
+            }
+            cur = cs.iter().find(|x| x.id == t).and_then(|x| x.parent_id);
+            guard += 1;
+        }
+        Some(dragged)
+    })
+}
+
+fn move_collection(c: Ctx, id: i64, target: Option<i64>, open: Option<RwSignal<HashMap<i64, bool>>>) {
+    let name = c.collections.with_untracked(|cs| cs.iter().find(|x| x.id == id).map(|x| x.name.clone())).unwrap_or_default();
+    spawn_local(async move {
+        let input = CollectionInput { name: None, parent_id: Some(target.unwrap_or(0)), color: None, ai_locked: None };
+        match c.api.send::<_, Collection>("PATCH", &format!("/api/collections/{id}"), &input).await {
+            Ok(_) => {
+                if let (Some(t), Some(open)) = (target, open) {
+                    open.update(|o| {
+                        o.insert(t, true);
+                    });
+                }
+                let to = match target {
+                    Some(t) => format!("nach „{}“", c.collection_name(t)),
+                    None => "nach ganz oben".to_string(),
+                };
+                c.notify(format!("„{name}“ {to} verschoben"), false);
+                c.load_meta();
+                c.reload();
+            }
+            Err(e) => c.notify(e, true),
+        }
+    });
+}
 
 /// Dokumente (per Drag & Drop aus der Liste) einer Sammlung hinzufügen
 fn drop_docs_on_collection(c: Ctx, ev: &web_sys::DragEvent, coll: i64) {
@@ -61,6 +118,7 @@ pub fn Sidebar() -> impl IntoView {
     // Auf-/zugeklappt per Klick; sonst offen bis Ebene 2 (siehe `tree_level`)
     let open = RwSignal::new(HashMap::<i64, bool>::new());
     let filter = RwSignal::new(String::new());
+    let root_over = RwSignal::new(false);
     // Gewählte Sammlung sichtbar machen: Vorfahren aufklappen
     Effect::new(move |_| {
         let Some(id) = c.collection.get() else { return };
@@ -121,7 +179,16 @@ pub fn Sidebar() -> impl IntoView {
                 </div>
             </nav>
 
-            <div class="section-head">
+            <div class="section-head" class:drop-target=move || root_over.get()
+                title="Sammlungen lassen sich im Baum per Drag & Drop verschieben; hierher ziehen = ganz nach oben"
+                on:dragover=move |ev| {
+                    if has_type(&ev, COLL_MIME) && can_move_to(c, None).is_some() { ev.prevent_default(); root_over.set(true); }
+                }
+                on:dragleave=move |_| root_over.set(false)
+                on:drop=move |ev| {
+                    root_over.set(false);
+                    if let Some(id) = can_move_to(c, None) { ev.prevent_default(); move_collection(c, id, None, None); }
+                }>
                 <span>"Sammlungen"</span>
                 <button class="icon" title="Neue Sammlung" on:click=move |_| create_collection(c, None)><Icon name="plus" class="sm" /></button>
             </div>
@@ -271,19 +338,39 @@ fn tree_level(
             view! {
                 <div class="tree-node">
                     <div class="nav-item tree-row"
+                        draggable="true"
                         class:active=move || c.collection.get() == Some(id)
                         class:drop-target=move || drag_over.get()
+                        on:dragstart=move |ev| {
+                            ev.stop_propagation();
+                            if let Some(dt) = ev.data_transfer() {
+                                let _ = dt.set_data(COLL_MIME, &id.to_string());
+                                dt.set_effect_allowed("move");
+                            }
+                            DRAGGED.with(|d| d.set(Some(id)));
+                        }
+                        on:dragend=move |_| DRAGGED.with(|d| d.set(None))
                         style=format!("padding-left: {}px", 8 + depth * 14)
                         on:click=move |_| {
                             c.unfiled.set(false);
                             c.collection.set(if c.collection.get_untracked() == Some(id) { None } else { Some(id) });
                         }
                         on:dragover=move |ev| {
-                            let ok = ev.data_transfer().map(|d| d.types().includes(&DRAG_MIME.into(), 0)).unwrap_or(false);
+                            let ok = has_type(&ev, DRAG_MIME) || (has_type(&ev, COLL_MIME) && can_move_to(c, Some(id)).is_some());
                             if ok { ev.prevent_default(); drag_over.set(true); }
                         }
                         on:dragleave=move |_| drag_over.set(false)
-                        on:drop=move |ev| { drag_over.set(false); drop_docs_on_collection(c, &ev, id); }
+                        on:drop=move |ev| {
+                            drag_over.set(false);
+                            if has_type(&ev, COLL_MIME) {
+                                if let Some(dragged) = can_move_to(c, Some(id)) {
+                                    ev.prevent_default();
+                                    move_collection(c, dragged, Some(id), Some(open));
+                                }
+                            } else {
+                                drop_docs_on_collection(c, &ev, id);
+                            }
+                        }
                     >
                         <span class="twisty" on:click=move |ev| {
                             ev.stop_propagation();

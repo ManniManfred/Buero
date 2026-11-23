@@ -66,6 +66,9 @@ Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crat
     ihren Untersammlungen.
     In der Seitenleiste sind anfangs die ersten beiden Ebenen zu sehen; ab mehr
     als fünf Sammlungen hilft ein Suchfeld, eine Sammlung samt Pfad zu finden.
+    Sammlungen lassen sich im Baum per Drag & Drop verschieben: auf eine andere
+    Sammlung ziehen macht sie zur Untersammlung, auf die Überschrift
+    „Sammlungen“ ziehen holt sie nach ganz oben.
   - **Tags** (farbig) zusätzlich, ebenfalls beliebig viele pro Dokument.
   - **Eingang**: alle Dokumente, die noch keiner Sammlung zugeordnet sind.
   - Zuordnen per Drag & Drop (Dokument auf Sammlung ziehen), im Detailbereich

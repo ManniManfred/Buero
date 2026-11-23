@@ -706,3 +706,7 @@ button.danger-solid:hover { filter: brightness(1.08); border-color: var(--danger
 .markdown ul.contains-task-list, .markdown li:has(> input[type=checkbox]) { list-style: none; }
 .markdown li > input[type=checkbox] { margin-right: .4em; }
 .markdown hr { border: none; border-top: 1px solid var(--border); }
+
+/* Sammlungen im Baum verschieben */
+.section-head.drop-target { outline: 2px dashed var(--accent); background: var(--accent-soft); border-radius: 6px; }
+.tree-row[draggable="true"]:active { cursor: grabbing; }
