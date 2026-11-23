@@ -260,15 +260,20 @@ pub async fn index_docs(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Inde
     for chunk in ids.chunks(200) {
         let mut qb = QueryBuilder::<Sqlite>::new(
             "SELECT id, title, original_filename, description, content, extension, mime, created_at, document_date, \
-             parent_id IS NOT NULL FROM documents WHERE id IN ",
+             parent_id FROM documents WHERE id IN ",
         );
         push_ids(&mut qb, chunk);
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(i64, String, String, String, String, String, String, i64, Option<String>, bool)> =
+        let rows: Vec<(i64, String, String, String, String, String, String, i64, Option<String>, Option<i64>)> =
             qb.build_query_as().fetch_all(pool).await?;
         let colls = memberships(pool, "document_collections", "collection_id", chunk).await?;
+        let mut parents: Vec<i64> = rows.iter().filter_map(|r| r.9).collect();
+        parents.sort_unstable();
+        parents.dedup();
+        let parent_colls = memberships(pool, "document_collections", "collection_id", &parents).await?;
         let tags = memberships(pool, "document_tags", "tag_id", chunk).await?;
-        for (id, title, filename, description, content, ext, mime, created, date, is_child) in rows {
+        for (id, title, filename, description, content, ext, mime, created, date, parent) in rows {
+            let parent_direct = parent.and_then(|p| parent_colls.get(&p).cloned()).unwrap_or_default();
             let direct = colls.get(&id).cloned().unwrap_or_default();
             let all = with_ancestors(&tree, &direct);
             let tag_ids = tags.get(&id).cloned().unwrap_or_default();
@@ -286,7 +291,9 @@ pub async fn index_docs(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Inde
                 kind: shared::kind_for(&ext, &mime).to_string(),
                 created,
                 date: date.as_deref().and_then(util::date_to_ts).unwrap_or(created),
-                is_child,
+                is_child: parent.is_some(),
+                parent_collection_ids: with_ancestors(&tree, &parent_direct),
+                parent_direct_collection_ids: parent_direct,
             });
         }
     }

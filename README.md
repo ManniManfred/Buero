@@ -83,6 +83,8 @@ Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crat
   Detailansicht unter „Verknüpfungen“ oder per Drag & Drop eines Dokuments auf
   ein anderes. Beim Stöbern erscheinen Unterdokumente aufklappbar unter ihrem
   Dokument, bei Suche oder Filter nach Dateiart/Tag einzeln mit Hinweis.
+  Liegt ein Unterdokument in einer Sammlung, in der sein Dokument nicht
+  erscheint, steht es dort direkt in der Liste (mit Hinweis auf das Dokument).
   Verschieben in Sammlungen und Löschen fragt, ob Unterdokumente mitgehen.
 - **Versionen**: bearbeitete Dateien als neue Version hochladen; alte Versionen
   bleiben abrufbar.

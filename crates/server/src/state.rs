@@ -61,11 +61,25 @@ impl AppState {
     }
 
     /// Indexeinträge der Dokumente neu schreiben und sofort sichtbar machen.
+    /// Dokumente neu indexieren – samt ihrer Unterdokumente, deren Eintrag die
+    /// Sammlungen des übergeordneten Dokuments enthält
     pub async fn reindex(&self, ids: &[i64]) -> anyhow::Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
-        let docs = crate::db::index_docs(&self.pool, ids).await?;
+        let mut all = ids.to_vec();
+        for chunk in ids.chunks(500) {
+            let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM documents WHERE parent_id IN (");
+            let mut sep = qb.separated(", ");
+            for id in chunk {
+                sep.push_bind(id);
+            }
+            qb.push(")");
+            all.extend(qb.build_query_scalar::<i64>().fetch_all(&self.pool).await?);
+        }
+        all.sort_unstable();
+        all.dedup();
+        let docs = crate::db::index_docs(&self.pool, &all).await?;
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             this.search.upsert(&docs)?;

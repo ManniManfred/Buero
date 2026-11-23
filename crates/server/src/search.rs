@@ -25,7 +25,7 @@ use tantivy::tokenizer::{
 };
 use tantivy::{DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term};
 
-const SCHEMA_VERSION: &str = "7";
+const SCHEMA_VERSION: &str = "8";
 const TOKENIZER: &str = "de_stem";
 
 #[derive(Clone, Copy)]
@@ -40,6 +40,8 @@ struct Fields {
     collection: Field,
     direct_collection: Field,
     child: Field,
+    parent_collection: Field,
+    parent_direct_collection: Field,
     tag: Field,
     kind: Field,
     unfiled: Field,
@@ -69,6 +71,10 @@ pub struct IndexDoc {
     pub direct_collection_ids: Vec<i64>,
     /// Unterdokument (z. B. Mail-Anhang)
     pub is_child: bool,
+    /// Unterdokument: Sammlungen des übergeordneten Dokuments (inkl. Vorfahren)
+    pub parent_collection_ids: Vec<i64>,
+    /// Unterdokument: Sammlungen, in denen das übergeordnete Dokument selbst liegt
+    pub parent_direct_collection_ids: Vec<i64>,
     pub tag_ids: Vec<i64>,
     pub kind: String,
     pub created: i64,
@@ -80,7 +86,9 @@ pub struct Query_ {
     pub collections: Vec<i64>,
     /// `collections` nur direkt, ohne Dokumente aus Untersammlungen
     pub direct: bool,
-    /// Unterdokumente ausblenden (sie erscheinen unter ihrem Dokument)
+    /// Unterdokumente ausblenden (sie erscheinen unter ihrem Dokument). Mit
+    /// Sammlungsfilter nur die, deren Dokument dort auch erscheint – liegt ein
+    /// Unterdokument in einer anderen Sammlung, steht es dort für sich.
     pub hide_children: bool,
     pub tags: Vec<i64>,
     pub kind: String,
@@ -120,6 +128,8 @@ fn schema() -> (Schema, Fields) {
         collection: b.add_u64_field("collection_id", INDEXED),
         direct_collection: b.add_u64_field("direct_collection_id", INDEXED),
         child: b.add_u64_field("child", INDEXED),
+        parent_collection: b.add_u64_field("parent_collection_id", INDEXED),
+        parent_direct_collection: b.add_u64_field("parent_direct_collection_id", INDEXED),
         tag: b.add_u64_field("tag_id", INDEXED),
         kind: b.add_text_field("kind", STRING),
         unfiled: b.add_u64_field("unfiled", INDEXED),
@@ -193,6 +203,12 @@ impl SearchIndex {
             doc.add_u64(f.tag, *t as u64);
         }
         doc.add_u64(f.child, d.is_child as u64);
+        for c in &d.parent_collection_ids {
+            doc.add_u64(f.parent_collection, *c as u64);
+        }
+        for c in &d.parent_direct_collection_ids {
+            doc.add_u64(f.parent_direct_collection, *c as u64);
+        }
         doc.add_text(f.kind, &d.kind);
         doc.add_u64(f.unfiled, d.collection_ids.is_empty() as u64);
         doc.add_i64(f.created, d.created);
@@ -367,10 +383,19 @@ impl SearchIndex {
             ))));
         }
         if q.hide_children {
-            clauses.push((Occur::MustNot, Box::new(TermQuery::new(
+            // Ausblenden, wenn das übergeordnete Dokument hier ebenfalls erscheint
+            let parent_field = if q.direct { f.parent_direct_collection } else { f.parent_collection };
+            let mut hidden: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Must, Box::new(TermQuery::new(
                 Term::from_field_u64(f.child, 1),
                 IndexRecordOption::Basic,
-            ))));
+            )))];
+            for c in &q.collections {
+                hidden.push((Occur::Must, Box::new(TermQuery::new(
+                    Term::from_field_u64(parent_field, *c as u64),
+                    IndexRecordOption::Basic,
+                ))));
+            }
+            clauses.push((Occur::MustNot, Box::new(BooleanQuery::new(hidden))));
         }
         for c in &q.exclude_collections {
             clauses.push((Occur::MustNot, Box::new(TermQuery::new(
@@ -690,11 +715,74 @@ mod tests {
             collection_ids: vec![],
             direct_collection_ids: vec![],
             is_child: false,
+            parent_collection_ids: vec![],
+            parent_direct_collection_ids: vec![],
             tag_ids: vec![],
             kind: "pdf".into(),
             created: 0,
             date: 0,
         }
+    }
+
+    #[test]
+    fn children_in_other_collections() {
+        let dir = std::env::temp_dir().join(format!("buero-search-{}", rand::random::<u64>()));
+        let (idx, _) = SearchIndex::open(&dir).unwrap();
+        // Mail (1) in Sammlung 10; Anhang (2) in 10 und zusätzlich in 20;
+        // Anhang (3) nur in 10; Sammlung 21 liegt unter 20
+        let mail = IndexDoc { collection_ids: vec![10], direct_collection_ids: vec![10], ..doc(1, "Mail") };
+        let child = |id, colls: Vec<i64>| IndexDoc {
+            collection_ids: colls.clone(),
+            direct_collection_ids: colls,
+            is_child: true,
+            parent_collection_ids: vec![10],
+            parent_direct_collection_ids: vec![10],
+            ..doc(id, "Anhang")
+        };
+        let other = IndexDoc { collection_ids: vec![21, 20], direct_collection_ids: vec![21], ..doc(4, "Mail2") };
+        let grandchild = IndexDoc {
+            collection_ids: vec![21, 20],
+            direct_collection_ids: vec![21],
+            is_child: true,
+            parent_collection_ids: vec![21, 20],
+            parent_direct_collection_ids: vec![21],
+            ..doc(5, "Anhang2")
+        };
+        idx.upsert(&[mail, child(2, vec![10, 20]), child(3, vec![10]), other, grandchild]).unwrap();
+        idx.commit().unwrap();
+        let find = |colls: Vec<i64>, direct: bool| {
+            let mut ids: Vec<i64> = idx
+                .search(&Query_ {
+                    text: String::new(),
+                    collections: colls,
+                    direct,
+                    hide_children: true,
+                    tags: vec![],
+                    kind: String::new(),
+                    unfiled: false,
+                    exclude_collections: vec![],
+                    sort: String::new(),
+                    offset: 0,
+                    limit: 10,
+                })
+                .unwrap()
+                .ids
+                .into_iter()
+                .map(|x| x.0)
+                .collect();
+            ids.sort();
+            ids
+        };
+        // Alle Dokumente: Unterdokumente nur unter ihrem Dokument
+        assert_eq!(find(vec![], false), [1, 4]);
+        // Sammlung der Mail: Anhänge stehen unter der Mail
+        assert_eq!(find(vec![10], false), [1]);
+        // Andere Sammlung: der Anhang steht für sich
+        assert_eq!(find(vec![20], true), [2]);
+        // Mit Untersammlungen: Mail2 erscheint, ihr Anhang darunter
+        assert_eq!(find(vec![20], false), [2, 4]);
+        // Nur direkt in 20: Mail2 liegt in 21 – nicht sichtbar, Anhang2 auch nicht (liegt in 21)
+        assert_eq!(find(vec![21], true), [4]);
     }
 
     #[test]
