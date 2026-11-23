@@ -121,14 +121,21 @@ async fn fetch_release(st: &AppState, repo: &str) -> anyhow::Result<Vec<Installe
     Ok(out)
 }
 
+/// Liegen Installer für Windows und Linux vor?
+fn complete(list: &[Installer]) -> bool {
+    let has = |exts: &[&str]| list.iter().any(|i| exts.iter().any(|e| i.name.to_lowercase().ends_with(e)));
+    has(&[".exe", ".msi"]) && has(&[".deb", ".rpm", ".appimage"])
+}
+
 async fn installers(st: &AppState) -> Vec<Installer> {
     let local = local_installers(&st.config.desktop_dir);
     let Some(repo) = st.config.desktop_repo.as_deref().filter(|_| local.is_empty()) else {
         return local;
     };
     if let Some((at, list)) = RELEASE_CACHE.lock().unwrap().as_ref() {
-        // Gefunden: länger merken; fehlt das Release noch (Desktop-Build läuft), bald erneut fragen
-        let ttl = if list.is_empty() { Duration::from_secs(120) } else { Duration::from_secs(1800) };
+        // Vollständig: länger merken; fehlt das Release oder ein Teil davon noch
+        // (Windows- und Linux-Build laden nacheinander hoch), bald erneut fragen
+        let ttl = if complete(list) { Duration::from_secs(1800) } else { Duration::from_secs(120) };
         if at.elapsed() < ttl {
             return list.clone();
         }
