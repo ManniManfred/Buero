@@ -20,6 +20,15 @@ pub struct ModeInfo {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct FolderStatus {
+    pub collection_id: i64,
+    pub name: String,
+    pub path: String,
+    pub connected: bool,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct DriveStatus {
     pub supported: bool,
     pub unavailable: Option<String>,
@@ -31,6 +40,10 @@ pub struct DriveStatus {
     pub modes: Vec<ModeInfo>,
     pub mount_point: String,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub folders_unavailable: Option<String>,
+    #[serde(default)]
+    pub folders: Vec<FolderStatus>,
 }
 
 fn mode_label(id: &str) -> &'static str {
@@ -177,7 +190,134 @@ pub fn DriveSection() -> impl IntoView {
             {s.last_error.clone().map(|e| view! {
                 <div class="small error-text">{e.lines().map(|l| view! { <p>{l.to_string()}</p> }).collect_view()}</div>
             })}
+            {s.folders_unavailable.is_none().then(|| view! { <FolderSection status=status /> })}
             <hr />
         }})}
+    }
+}
+
+/// Weitere Sync-Ordner, je einer Sammlung zugeordnet
+#[component]
+fn FolderSection(status: RwSignal<Option<DriveStatus>>) -> impl IntoView {
+    let c = ctx();
+    let coll = RwSignal::new(String::new());
+    let path = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let folders = move || status.with(|s| s.as_ref().map(|s| s.folders.clone()).unwrap_or_default());
+
+    let apply = move |r: Result<DriveStatus, String>| {
+        busy.set(false);
+        match r {
+            Ok(s) => status.set(Some(s)),
+            Err(e) => c.notify(format!("Sync-Ordner: {e}"), true),
+        }
+    };
+    let add = move |_| {
+        let Ok(id) = coll.get_untracked().parse::<i64>() else { return };
+        let name = c.collections.with_untracked(|cs| cs.iter().find(|x| x.id == id).map(|x| x.name.clone())).unwrap_or_default();
+        busy.set(true);
+        let args = json!({
+            "server": c.api.base.get_untracked(),
+            "token": c.api.token.get_untracked(),
+            "collectionId": id,
+            "name": name,
+            "path": Some(path.get_untracked()).filter(|p| !p.trim().is_empty()),
+        });
+        spawn_local(async move {
+            let r = invoke::<DriveStatus>("folder_add", args).await;
+            if r.is_ok() {
+                coll.set(String::new());
+                path.set(String::new());
+            }
+            apply(r)
+        });
+    };
+    let remove = move |id: i64| {
+        busy.set(true);
+        spawn_local(async move { apply(invoke("folder_remove", json!({ "collectionId": id })).await) });
+    };
+    let open = move |id: i64| {
+        spawn_local(async move {
+            if let Err(e) = invoke::<()>("drive_open", json!({ "collectionId": id })).await {
+                c.notify(e, true);
+            }
+        });
+    };
+    // Sammlungen mit vollem Pfad, ohne die schon eingerichteten
+    let options = move || {
+        let used: Vec<i64> = folders().iter().map(|f| f.collection_id).collect();
+        let mut v: Vec<(i64, String)> = c.collections.with(|cs| {
+            cs.iter().filter(|x| !used.contains(&x.id)).map(|x| (x.id, crate::state::collection_path(cs, x.id))).collect()
+        });
+        v.sort_by_key(|(_, p)| p.to_lowercase());
+        v
+    };
+
+    view! {
+        <h3>"Sync-Ordner für einzelne Sammlungen"</h3>
+        <p class="muted small">
+            "Zusätzlich lässt sich jede Sammlung mit einem eigenen Ordner abgleichen, z. B. „Steuer“ mit "
+            "„Dokumente\\Steuer“. Der Ordner entspricht dann der Sammlung, Unterordner ihren Unter-Sammlungen; "
+            "neue Dateien landen in dieser Sammlung."
+        </p>
+        <Show when=move || !folders().is_empty()>
+            <ul class="folder-list">
+                <For each=folders key=|f| (f.collection_id, f.path.clone(), f.connected, f.last_error.clone()) let:f>
+                    {
+                        let id = f.collection_id;
+                        let name = c.collections.with_untracked(|cs| cs.iter().any(|x| x.id == id))
+                            .then(|| c.collection_name(id))
+                            .unwrap_or(f.name.clone());
+                        view! {
+                            <li>
+                                <div class="folder-head">
+                                    <Icon name="folder" />
+                                    <strong>{name}</strong>
+                                    <span class=if f.connected { "pill ok" } else { "pill" }>
+                                        {if f.connected { "verbunden" } else { "getrennt" }}
+                                    </span>
+                                </div>
+                                <code class="small">{f.path.clone()}</code>
+                                {f.last_error.clone().map(|e| view! {
+                                    <div class="small error-text">{e.lines().map(|l| view! { <p>{l.to_string()}</p> }).collect_view()}</div>
+                                })}
+                                <div class="button-row">
+                                    <Show when=move || f.connected>
+                                        <button on:click=move |_| open(id)><Icon name="external" />"Öffnen"</button>
+                                    </Show>
+                                    <button on:click=move |_| remove(id) disabled=move || busy.get()
+                                        title="Abgleich beenden und bei Windows abmelden. Geladene Dateien bleiben im Ordner.">
+                                        "Entfernen"
+                                    </button>
+                                </div>
+                            </li>
+                        }
+                    }
+                </For>
+            </ul>
+        </Show>
+        <div class="folder-add">
+            <label>"Sammlung"
+                <select prop:value=move || coll.get() on:change=move |ev| coll.set(event_target_value(&ev))>
+                    <option value="">"– Sammlung wählen –"</option>
+                    {move || options().into_iter().map(|(id, p)| view! { <option value=id.to_string()>{p}</option> }).collect_view()}
+                </select>
+            </label>
+            <label>"Ordner (neu oder leer, leer lassen für Vorschlag)"
+                <input prop:value=move || path.get() on:input=move |ev| path.set(event_target_value(&ev))
+                    placeholder=move || {
+                        let n = coll.get().parse::<i64>().ok()
+                            .and_then(|id| c.collections.with(|cs| cs.iter().find(|x| x.id == id).map(|x| x.name.clone())));
+                        let base = status.with(|s| s.as_ref().and_then(|s| s.modes.iter().find(|m| m.id == "sync").map(|m| m.default_path.clone()))).unwrap_or_default();
+                        match n {
+                            Some(n) if !base.is_empty() => format!("{base} - {n}"),
+                            _ => String::new(),
+                        }
+                    } />
+            </label>
+            <button on:click=add disabled=move || busy.get() || coll.get().is_empty()>
+                <Icon name="folder" />{move || if busy.get() { "Wird eingerichtet …" } else { "Sync-Ordner hinzufügen" }}
+            </button>
+        </div>
     }
 }

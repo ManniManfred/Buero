@@ -20,6 +20,10 @@
 //! Stand des Servers (neue, geänderte, umbenannte und gelöschte Einträge).
 //! Die Abbildung ist dieselbe wie beim Laufwerk (siehe `core`).
 //!
+//! Statt aller Sammlungen kann ein Ordner auch genau einer Sammlung zugeordnet
+//! sein ([`Engine::scoped`]): Dann entspricht der Ordner selbst dieser
+//! Sammlung, Unterordner ihren Unter-Sammlungen; einen „Eingang“ gibt es nicht.
+//!
 //! Die Logik ist plattformunabhängig ([`LocalFs`], [`Remote`]) und wird mit
 //! Attrappen getestet; die Windows-Anbindung steckt in `cloud`.
 
@@ -206,6 +210,8 @@ pub struct Engine<R: Remote, L: LocalFs> {
     pub remote: R,
     pub local: L,
     state_file: Option<PathBuf>,
+    /// Zugeordnete Sammlung (`None`: alle Sammlungen samt Eingang)
+    base: Option<i64>,
     index: BTreeSet<Ident>,
     /// Lokal fehlende Einträge: in wie vielen Durchläufen schon
     missing: HashMap<Ident, u32>,
@@ -242,13 +248,31 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
             .and_then(|b| serde_json::from_slice::<IndexFile>(&b).ok())
             .map(|i| i.entries)
             .unwrap_or_default();
-        Engine { remote, local, state_file, index, missing: HashMap::new(), waiting: HashMap::new() }
+        Engine { remote, local, state_file, base: None, index, missing: HashMap::new(), waiting: HashMap::new() }
+    }
+
+    /// Ordner gehört zu genau einer Sammlung (samt Unter-Sammlungen)
+    pub fn scoped(mut self, collection: i64) -> Self {
+        self.base = Some(collection);
+        self
+    }
+
+    /// Ordner, dem der Sync-Ordner selbst entspricht
+    fn root(&self) -> Dir {
+        self.base.map(Dir::Coll).unwrap_or(Dir::Root)
     }
 
     fn load(&self) -> Result<Snapshot, String> {
         let colls = self.remote.collections().map_err(|e| e.to_string())?;
         let docs = self.remote.all_documents().map_err(|e| e.to_string())?;
-        Ok(Snapshot::build(colls, docs))
+        let snap = Snapshot::build(colls, docs);
+        if let Some(b) = self.base {
+            // Sonst würde der ganze Ordner geleert
+            if !snap.colls.contains_key(&b) {
+                return Err("Die zugeordnete Sammlung gibt es am Server nicht mehr".into());
+            }
+        }
+        Ok(snap)
     }
 
     fn scan(&self) -> Result<Vec<LocalEntry>, String> {
@@ -315,7 +339,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
 
     fn push(&mut self, snap: &Snapshot, entries: &[LocalEntry], pass: &mut Pass) {
         let mut dirs: HashMap<Vec<String>, Dir> = HashMap::new();
-        dirs.insert(Vec::new(), Dir::Root);
+        dirs.insert(Vec::new(), self.root());
         let mut by_ident: HashMap<Ident, Vec<&LocalEntry>> = HashMap::new();
         for e in entries {
             if let Some(m) = &e.meta {
@@ -629,13 +653,15 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
         let present: HashSet<Ident> = entries.iter().filter_map(|e| e.meta.as_ref().map(Meta::ident)).collect();
         let inbox_present = present.contains(&Ident::Inbox)
             || entries.iter().any(|e| e.is_dir && e.path.len() == 1 && e.name().eq_ignore_ascii_case(INBOX_NAME));
+        // Nur was (noch) zu diesem Ordner gehört
+        let scope: HashSet<Dir> = Self::dir_paths(snap, self.root()).into_iter().map(|(d, _)| d).collect();
         let gone: Vec<Ident> = self
             .index
             .iter()
             .filter(|i| !present.contains(i) && !adopted.contains(i) && **i != Ident::Inbox)
             .filter(|i| match i {
-                Ident::Coll(c) => snap.colls.contains_key(c),
-                Ident::Doc(d, k) => snap
+                Ident::Coll(c) => scope.contains(&Dir::Coll(*c)) && Some(*c) != self.base,
+                Ident::Doc(d, k) => scope.contains(&dir_of_key(*k)) && snap
                     .entries
                     .get(&dir_of_key(*k))
                     .is_some_and(|l| l.iter().any(|(_, e)| *e == Entry::Doc(*d))),
@@ -649,7 +675,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
         }
         // Schutz: fehlt fast alles (Ordner verschoben, Platte nicht da, …),
         // wird nichts gelöscht
-        if !inbox_present || (gone.len() > 20 && gone.len() * 2 > self.index.len()) {
+        if (self.base.is_none() && !inbox_present) || (gone.len() > 20 && gone.len() * 2 > self.index.len()) {
             pass.errors.push(format!(
                 "{} Einträge fehlen im Sync-Ordner – zur Sicherheit wird nichts am Server gelöscht",
                 gone.len()
@@ -702,9 +728,9 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
     // -----------------------------------------------------------------------
 
     /// Erwartete Pfade aller Ordner
-    fn dir_paths(snap: &Snapshot) -> Vec<(Dir, RelPath)> {
+    fn dir_paths(snap: &Snapshot, root: Dir) -> Vec<(Dir, RelPath)> {
         let mut out = Vec::new();
-        let mut queue = vec![(Dir::Root, Vec::<String>::new())];
+        let mut queue = vec![(root, Vec::<String>::new())];
         let mut seen = HashSet::new();
         while let Some((d, p)) = queue.pop() {
             if !seen.insert(d) {
@@ -731,12 +757,15 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
             }
             by_path.insert(lower(&e.path), e);
         }
-        let dirs = Self::dir_paths(snap);
+        let dirs = Self::dir_paths(snap, self.root());
         let dir_path: HashMap<Dir, RelPath> = dirs.iter().cloned().collect();
         let mut expected: HashSet<Ident> = HashSet::new();
 
         // Ordner
         for (d, path) in &dirs {
+            if path.is_empty() {
+                continue; // der Sync-Ordner selbst
+            }
             let (ident, meta) = match d {
                 Dir::Root => continue,
                 Dir::Inbox => (Ident::Inbox, Meta::Inbox),
@@ -1255,6 +1284,71 @@ mod tests {
         assert!(!e.local.has("Notiz.txt"));
         let Some(Meta::Doc { id, dir: 0, .. }) = e.local.node("Eingang/Notiz.txt").meta else { panic!() };
         assert!(e.remote.get(id).unwrap().0.collection_ids.is_empty());
+    }
+
+    #[test]
+    fn scoped_folder() {
+        let r = FakeRemote::default();
+        let steuer = r.coll("Steuer", None);
+        let jahr = r.coll("2024", Some(steuer));
+        let privat = r.coll("Privat", None);
+        let doc = r.doc("Bescheid", "bescheid.pdf", vec![steuer], "v1");
+        let beleg = r.doc("Beleg", "beleg.pdf", vec![jahr], "b");
+        r.doc("Urlaub", "urlaub.jpg", vec![privat], "u");
+        r.doc("Zettel", "zettel.txt", vec![], "inbox");
+        let mut e = Engine::new(r, FakeLocal::new(), None).scoped(steuer);
+        let p = e.reconcile().unwrap();
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        // Ordner = Sammlung „Steuer“: kein Eingang, keine fremden Sammlungen
+        let mut paths = e.local.paths();
+        paths.sort();
+        assert_eq!(paths, vec!["2024", "2024/Beleg.pdf", "Bescheid.pdf"]);
+        assert_eq!(e.local.node("2024").meta, Some(Meta::Coll { id: jahr, name: "2024".into(), parent: Some(steuer) }));
+        assert!(e.remote.log().is_empty(), "{:?}", e.remote.log());
+
+        // Neue Datei direkt im Ordner → in „Steuer“
+        e.local.write("Neu.txt", "n");
+        e.reconcile().unwrap();
+        assert!(e.local.has("Neu.txt"));
+        let Some(Meta::Doc { id, dir, .. }) = e.local.node("Neu.txt").meta else { panic!() };
+        assert_eq!(dir, steuer);
+        assert_eq!(e.remote.get(id).unwrap().0.collection_ids, vec![steuer]);
+
+        // Neuer Unterordner → Unter-Sammlung von „Steuer“
+        e.local.mkdir("2025");
+        e.reconcile().unwrap();
+        let Some(Meta::Coll { id: c25, .. }) = e.local.node("2025").meta else { panic!() };
+        assert_eq!(e.remote.0.borrow().colls[&c25].parent_id, Some(steuer));
+
+        // Verschieben in den Unterordner
+        e.local.user_rename("Bescheid.pdf", "2025/Bescheid.pdf");
+        e.reconcile().unwrap();
+        assert_eq!(e.remote.get(doc).unwrap().0.collection_ids, vec![c25]);
+
+        // Löschen direkt im Ordner nimmt nur aus der Sammlung
+        e.local.user_delete("Neu.txt");
+        e.reconcile().unwrap();
+        e.reconcile().unwrap();
+        assert!(e.remote.get(id).unwrap().0.collection_ids.is_empty());
+
+        // Am Server aus der Sammlung herausgenommen → lokal weg
+        e.remote.update_document(beleg, &DocumentUpdate { collection_ids: Some(vec![privat]), ..Default::default() }).unwrap();
+        e.reconcile().unwrap();
+        assert!(!e.local.has("2024/Beleg.pdf"));
+        assert_eq!(e.remote.get(beleg).unwrap().0.collection_ids, vec![privat]);
+    }
+
+    #[test]
+    fn scoped_folder_missing_collection() {
+        let r = FakeRemote::default();
+        let steuer = r.coll("Steuer", None);
+        r.doc("Bescheid", "bescheid.pdf", vec![steuer], "v1");
+        let mut e = Engine::new(r, FakeLocal::new(), None).scoped(steuer);
+        e.reconcile().unwrap();
+        e.remote.delete_collection(steuer).unwrap();
+        // Nichts lokal wegräumen, sondern melden
+        assert!(e.reconcile().is_err());
+        assert!(e.local.has("Bescheid.pdf"));
     }
 
     #[test]

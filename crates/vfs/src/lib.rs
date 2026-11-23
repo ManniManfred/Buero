@@ -9,6 +9,8 @@
 //! - **Laufwerk** (Linux: FUSE, Windows: WinFsp): virtuelles Dateisystem
 //!
 //! Die Struktur der Sammlungen erscheint in beiden Fällen als Ordnerbaum.
+//! Sync-Ordner können außerdem genau einer Sammlung zugeordnet sein (mehrere
+//! Ordner gleichzeitig möglich).
 
 pub mod client;
 mod core;
@@ -76,6 +78,8 @@ pub struct Options {
     pub mount_point: PathBuf,
     /// Zwischenspeicher für geladene Dateien
     pub cache_dir: PathBuf,
+    /// Nur Sync-Ordner: zugeordnete Sammlung (ID, Name); `None` = alle Sammlungen
+    pub collection: Option<(i64, String)>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -96,6 +100,7 @@ enum Inner {
 /// Eingebundene Sammlungen. Beim Verwerfen wird ausgehängt bzw. getrennt.
 pub struct Drive {
     mode: Mode,
+    collection: Option<i64>,
     mount_point: PathBuf,
     inner: Inner,
 }
@@ -107,6 +112,11 @@ impl Drive {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Zugeordnete Sammlung (nur Sync-Ordner)
+    pub fn collection(&self) -> Option<i64> {
+        self.collection
     }
 
     /// Letzter Fehler beim Hochladen oder Abgleichen
@@ -190,8 +200,18 @@ pub fn mount(o: Options) -> Result<Drive, String> {
         #[cfg(windows)]
         {
             let errors = Arc::new(Mutex::new(None));
-            let mount = cloud::mount(client, &o.server, &o.mount_point, &o.cache_dir.join("sync"), errors.clone())?;
-            return Ok(Drive { mode: o.mode, mount_point: o.mount_point, inner: Inner::Sync { mount, errors } });
+            let coll = o.collection.as_ref().map(|(c, _)| *c);
+            let cache = o.cache_dir.join(match coll {
+                Some(c) => format!("sync-{c}"),
+                None => "sync".into(),
+            });
+            let mount = cloud::mount(client, &o.server, &o.mount_point, &cache, o.collection, errors.clone())?;
+            return Ok(Drive {
+                mode: o.mode,
+                collection: coll,
+                mount_point: o.mount_point,
+                inner: Inner::Sync { mount, errors },
+            });
         }
         #[cfg(not(windows))]
         {
@@ -205,16 +225,42 @@ pub fn mount(o: Options) -> Result<Drive, String> {
     #[cfg(target_os = "linux")]
     {
         let mount = fuse::mount(vfs.clone(), &o.mount_point)?;
-        Ok(Drive { mode: o.mode, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount } })
+        Ok(Drive { mode: o.mode, collection: None, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount } })
     }
     #[cfg(windows)]
     {
         let mount = winfs::mount(vfs.clone(), &o.mount_point)?;
-        Ok(Drive { mode: o.mode, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount } })
+        Ok(Drive { mode: o.mode, collection: None, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount } })
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = vfs;
         Err("Das Laufwerk gibt es nur unter Linux und Windows.".into())
     }
+}
+
+/// Sync-Ordner bei Windows abmelden, nachdem er getrennt wurde (Ordner
+/// entfernt). Geladene Dateien bleiben, nur online vorhandene verschwinden.
+pub fn forget_sync_folder(collection: Option<i64>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        cloud::unregister(collection)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = collection;
+        Ok(())
+    }
+}
+
+/// Vorgeschlagener Ort für den Sync-Ordner einer Sammlung
+pub fn default_folder_for(name: &str) -> PathBuf {
+    let base = default_mount_point(Mode::SyncFolder);
+    let clean: String = name
+        .chars()
+        .map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
+        .collect();
+    let clean = clean.trim().trim_end_matches('.').to_string();
+    let file = format!("{} - {}", base.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(), clean);
+    base.with_file_name(file)
 }

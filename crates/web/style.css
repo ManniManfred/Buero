@@ -655,3 +655,14 @@ button.danger-solid:hover { filter: brightness(1.08); border-color: var(--danger
 .picker-results li:hover { background: var(--bg); }
 .picker-results li.active { background: var(--accent-soft); color: var(--accent); }
 .link-picker label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+
+/* Sync-Ordner je Sammlung (Desktop) */
+.folder-list { list-style: none; padding: 0; margin: 8px 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.folder-list li { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.folder-head { display: flex; align-items: center; gap: 6px; }
+.folder-head .pill { margin-left: auto; }
+.folder-list code { word-break: break-all; }
+.pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.pill.ok { color: #1a7f37; border-color: #1a7f37; }
+.folder-add { display: flex; flex-direction: column; gap: 8px; }
+.folder-add button { align-self: flex-start; }

@@ -33,6 +33,18 @@ struct DriveSettings {
     /// „sync“ oder „drive“ (fehlt bei älteren Einstellungen: Laufwerk)
     #[serde(default)]
     mode: Option<String>,
+    /// Weitere Sync-Ordner, je einer Sammlung zugeordnet
+    #[serde(default)]
+    folders: Vec<FolderSetting>,
+}
+
+/// Sync-Ordner für eine Sammlung
+#[derive(Clone, Serialize, Deserialize)]
+struct FolderSetting {
+    collection_id: i64,
+    /// Name der Sammlung beim Einrichten (für Anzeige und Explorer)
+    name: String,
+    path: String,
 }
 
 impl DriveSettings {
@@ -55,6 +67,8 @@ struct Mounted {
 #[derive(Default)]
 struct DriveState {
     mounted: Mutex<Option<Mounted>>,
+    /// Sync-Ordner je Sammlung (Schlüssel: Sammlung)
+    folders: Mutex<std::collections::HashMap<i64, Mounted>>,
     /// Verhindert gleichzeitiges Ein-/Aushängen
     busy: tokio::sync::Mutex<()>,
 }
@@ -69,6 +83,15 @@ struct ModeInfo {
 }
 
 #[derive(Serialize)]
+struct FolderStatus {
+    collection_id: i64,
+    name: String,
+    path: String,
+    connected: bool,
+    last_error: Option<String>,
+}
+
+#[derive(Serialize)]
 struct DriveStatus {
     supported: bool,
     /// Fehlende Systemvoraussetzung (FUSE/WinFsp) der gewählten Art, sonst `None`
@@ -80,6 +103,9 @@ struct DriveStatus {
     modes: Vec<ModeInfo>,
     mount_point: String,
     last_error: Option<String>,
+    /// Sync-Ordner je Sammlung möglich (Windows); sonst Grund
+    folders_unavailable: Option<String>,
+    folders: Vec<FolderStatus>,
 }
 
 fn settings_path(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -129,12 +155,67 @@ fn status(app: &tauri::AppHandle, st: &DriveState) -> DriveStatus {
             .collect(),
         mount_point,
         last_error: m.as_ref().and_then(|m| m.drive.last_error()),
+        folders_unavailable: buero_vfs::check_available(buero_vfs::Mode::SyncFolder).err(),
+        folders: {
+            let f = st.folders.lock().unwrap_or_else(|e| e.into_inner());
+            s.folders
+                .iter()
+                .map(|x| {
+                    let m = f.get(&x.collection_id);
+                    FolderStatus {
+                        collection_id: x.collection_id,
+                        name: x.name.clone(),
+                        path: x.path.clone(),
+                        connected: m.is_some(),
+                        last_error: m.and_then(|m| m.drive.last_error()),
+                    }
+                })
+                .collect()
+        },
     }
 }
 
 fn unmount_now(st: &DriveState) {
     let m = st.mounted.lock().unwrap_or_else(|e| e.into_inner()).take();
     drop(m);
+}
+
+/// Alle Sync-Ordner der Sammlungen trennen
+fn disconnect_folders(st: &DriveState) {
+    let all: Vec<Mounted> = st.folders.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, m)| m).collect();
+    drop(all);
+}
+
+fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_cache_dir().map_err(|e| e.to_string())?.join("laufwerk"))
+}
+
+/// Sync-Ordner einer Sammlung verbinden
+async fn connect_folder(
+    app: &tauri::AppHandle,
+    st: &DriveState,
+    server: String,
+    token: Option<String>,
+    f: &FolderSetting,
+) -> Result<(), String> {
+    let old = st.folders.lock().unwrap_or_else(|e| e.into_inner()).remove(&f.collection_id);
+    drop(old);
+    let opts = buero_vfs::Options {
+        server: server.clone(),
+        token: token.clone(),
+        mode: buero_vfs::Mode::SyncFolder,
+        mount_point: PathBuf::from(f.path.trim()),
+        cache_dir: cache_dir(app)?,
+        collection: Some((f.collection_id, f.name.clone())),
+    };
+    let drive = tauri::async_runtime::spawn_blocking(move || buero_vfs::mount(opts))
+        .await
+        .map_err(|e| e.to_string())??;
+    st.folders
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(f.collection_id, Mounted { drive, server, token });
+    Ok(())
 }
 
 async fn do_mount(
@@ -150,8 +231,14 @@ async fn do_mount(
         .filter(|m| !m.trim().is_empty())
         .map(|m| PathBuf::from(m.trim()))
         .unwrap_or_else(|| buero_vfs::default_mount_point(mode));
-    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("laufwerk");
-    let opts = buero_vfs::Options { server: server.clone(), token: token.clone(), mode, mount_point: mp, cache_dir };
+    let opts = buero_vfs::Options {
+        server: server.clone(),
+        token: token.clone(),
+        mode,
+        mount_point: mp,
+        cache_dir: cache_dir(app)?,
+        collection: None,
+    };
     let drive = tauri::async_runtime::spawn_blocking(move || buero_vfs::mount(opts))
         .await
         .map_err(|e| e.to_string())??;
@@ -183,10 +270,61 @@ async fn drive_mount(
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .map(|m| m.drive.mount_point().display().to_string());
-    save_settings(
-        &app,
-        &DriveSettings { enabled: true, mount_point: actual.or(mount_point), mode: Some(mode.as_str().into()) },
-    )?;
+    let mut s = load_settings(&app);
+    s.enabled = true;
+    s.mount_point = actual.or(mount_point);
+    s.mode = Some(mode.as_str().into());
+    save_settings(&app, &s)?;
+    Ok(status(&app, &st))
+}
+
+/// Sync-Ordner für eine Sammlung einrichten (bzw. Ort ändern) und merken
+#[tauri::command]
+async fn folder_add(
+    app: tauri::AppHandle,
+    st: State<'_, DriveState>,
+    server: String,
+    token: Option<String>,
+    collection_id: i64,
+    name: String,
+    path: Option<String>,
+) -> Result<DriveStatus, String> {
+    let _busy = st.busy.lock().await;
+    let path = path
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| buero_vfs::default_folder_for(&name).display().to_string());
+    let mut s = load_settings(&app);
+    let taken = |p: &str| {
+        let p = p.trim_end_matches(['\\', '/']).to_lowercase();
+        s.folders.iter().any(|f| f.collection_id != collection_id && f.path.trim_end_matches(['\\', '/']).to_lowercase() == p)
+            || (s.enabled
+                && s.mode() == buero_vfs::Mode::SyncFolder
+                && s.mount_point.as_deref().map(|m| m.trim_end_matches(['\\', '/']).to_lowercase()) == Some(p))
+    };
+    if taken(&path) {
+        return Err(format!("„{path}“ wird schon für einen anderen Sync-Ordner verwendet."));
+    }
+    let f = FolderSetting { collection_id, name, path };
+    connect_folder(&app, &st, server, token, &f).await?;
+    s.folders.retain(|x| x.collection_id != collection_id);
+    s.folders.push(f);
+    save_settings(&app, &s)?;
+    Ok(status(&app, &st))
+}
+
+/// Sync-Ordner einer Sammlung trennen, bei Windows abmelden und vergessen
+#[tauri::command]
+async fn folder_remove(app: tauri::AppHandle, st: State<'_, DriveState>, collection_id: i64) -> Result<DriveStatus, String> {
+    let _busy = st.busy.lock().await;
+    let old = st.folders.lock().unwrap_or_else(|e| e.into_inner()).remove(&collection_id);
+    drop(old);
+    let mut s = load_settings(&app);
+    s.folders.retain(|x| x.collection_id != collection_id);
+    save_settings(&app, &s)?;
+    tauri::async_runtime::spawn_blocking(move || buero_vfs::forget_sync_folder(Some(collection_id)))
+        .await
+        .map_err(|e| e.to_string())??;
     Ok(status(&app, &st))
 }
 
@@ -214,6 +352,7 @@ async fn drive_sync(
     let _busy = st.busy.lock().await;
     if !logged_in {
         unmount_now(&st);
+        disconnect_folders(&st);
         return Ok(status(&app, &st));
     }
     let s = load_settings(&app);
@@ -225,14 +364,44 @@ async fn drive_sync(
         .map(|m| (m.server.clone(), m.token.clone()));
     let mode = s.mode();
     if s.enabled && current != Some((server.clone(), token.clone())) && buero_vfs::check_available(mode).is_ok() {
-        do_mount(&app, &st, server, token, mode, s.mount_point).await?;
+        do_mount(&app, &st, server.clone(), token.clone(), mode, s.mount_point.clone()).await?;
+    }
+    // Sync-Ordner der Sammlungen; ein Fehler hält die anderen nicht auf
+    if buero_vfs::check_available(buero_vfs::Mode::SyncFolder).is_ok() {
+        let mut problems = Vec::new();
+        for f in &s.folders {
+            let cur = st
+                .folders
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&f.collection_id)
+                .map(|m| (m.server.clone(), m.token.clone()));
+            if cur != Some((server.clone(), token.clone())) {
+                if let Err(e) = connect_folder(&app, &st, server.clone(), token.clone(), f).await {
+                    problems.push(format!("{}: {e}", f.name));
+                }
+            }
+        }
+        if !problems.is_empty() {
+            return Err(problems.join("\n"));
+        }
     }
     Ok(status(&app, &st))
 }
 
-/// Laufwerk im Dateimanager öffnen
+/// Laufwerk bzw. Sync-Ordner (`collection_id`) im Dateimanager öffnen
 #[tauri::command]
-fn drive_open(app: tauri::AppHandle, st: State<'_, DriveState>) -> Result<(), String> {
+fn drive_open(app: tauri::AppHandle, st: State<'_, DriveState>, collection_id: Option<i64>) -> Result<(), String> {
+    if let Some(c) = collection_id {
+        let p = st
+            .folders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&c)
+            .map(|m| m.drive.mount_point().display().to_string())
+            .ok_or("Nicht verbunden")?;
+        return app.opener().open_path(p, None::<&str>).map_err(|e| e.to_string());
+    }
     let mp = st
         .mounted
         .lock()
@@ -316,6 +485,7 @@ async fn update_install(
     {
         let _busy = drive.busy.lock().await;
         unmount_now(&drive);
+        disconnect_folders(&drive);
     }
     update.install(bytes).map_err(|e| format!("Installation fehlgeschlagen: {e}"))?;
     app.restart()
@@ -333,6 +503,8 @@ fn main() {
             drive_unmount,
             drive_sync,
             drive_open,
+            folder_add,
+            folder_remove,
             update_check,
             update_install
         ])
@@ -342,6 +514,7 @@ fn main() {
             if let RunEvent::Exit = event {
                 // Sauber aushängen, sonst bleibt ein toter Einhängepunkt zurück
                 unmount_now(&app.state::<DriveState>());
+                disconnect_folders(&app.state::<DriveState>());
             }
         });
 }

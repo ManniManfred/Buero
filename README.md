@@ -341,6 +341,15 @@ wieder trennt bzw. aushängt.
   Zusatzprogramm (Windows 10 ab 1709). Änderungen werden im Hintergrund
   abgeglichen – nach lokalen Änderungen sofort, sonst alle 20 Sekunden.
   Probleme (z. B. Konflikte) zeigen die Einstellungen an.
+- **Windows – Sync-Ordner je Sammlung:** zusätzlich lässt sich jede Sammlung
+  mit einem eigenen Ordner abgleichen (beliebig viele, z. B. „Steuer“ mit
+  `D:\Ablage\Steuer`; vorgeschlagen `C:\Users\<Name>\Büro - <Sammlung>`).
+  Der Ordner entspricht der Sammlung, Unterordner ihren Unter-Sammlungen,
+  Dateien direkt im Ordner liegen in der Sammlung selbst; einen `Eingang` gibt
+  es dort nicht. Jeder Ordner erscheint im Explorer als „Büro – <Sammlung>“.
+  „Entfernen“ beendet den Abgleich und meldet den Ordner bei Windows ab
+  (geladene Dateien bleiben). Wird die Sammlung am Server gelöscht, bleibt der
+  Ordner unangetastet und die Einstellungen melden das.
 - **Windows – Laufwerk:** alternativ als eigener Laufwerksbuchstabe `B:` (oder
   der nächste freie) über [WinFsp](https://winfsp.dev/rel/).
 - **Linux:** als Ordner, standardmäßig `~/Büro` (FUSE).

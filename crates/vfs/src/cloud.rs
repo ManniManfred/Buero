@@ -9,6 +9,10 @@
 //! Öffnen geladen; „Immer auf diesem Gerät behalten“ und „Speicherplatz
 //! freigeben“ funktionieren wie gewohnt. Kein Zusatzprogramm nötig.
 //!
+//! Es kann mehrere Sync-Ordner geben: einen für alle Sammlungen (mit
+//! „Eingang“) und beliebig viele, die je einer Sammlung zugeordnet sind. Jeder
+//! wird bei Windows eigens angemeldet (eigenes Konto je Sammlung).
+//!
 //! Was wann hoch- oder heruntergeladen wird, entscheidet der Abgleich in
 //! [`crate::sync`]; hier steckt nur die Anbindung an Windows:
 //! - [`WinLocal`]: Platzhalter lesen, anlegen, aktualisieren
@@ -84,18 +88,37 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
     Ok(out)
 }
 
-fn sync_root_id() -> Result<SyncRootId, String> {
+/// Anmeldung bei Windows: eine je Sammlung, eine für alle Sammlungen
+fn sync_root_id(collection: Option<i64>) -> Result<SyncRootId, String> {
     let sid = SecurityId::current_user().map_err(text)?;
-    Ok(SyncRootIdBuilder::new(PROVIDER).user_security_id(sid).account_name(ACCOUNT).build())
+    let account = match collection {
+        Some(c) => format!("{ACCOUNT}-{c}"),
+        None => ACCOUNT.to_string(),
+    };
+    Ok(SyncRootIdBuilder::new(PROVIDER).user_security_id(sid).account_name(&account).build())
+}
+
+/// Sync-Ordner bei Windows abmelden (beim Entfernen eines Ordners). Nur online
+/// vorhandene Platzhalter verschwinden, geladene Dateien bleiben.
+pub fn unregister(collection: Option<i64>) -> Result<(), String> {
+    let id = sync_root_id(collection)?;
+    if id.is_registered().unwrap_or(false) {
+        id.unregister().map_err(|e| format!("Sync-Ordner abmelden: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Ordner bei Windows anmelden. `true`: neu angemeldet (Index verwerfen).
-fn register(root: &Path, server: &str) -> Result<bool, String> {
-    let id = sync_root_id()?;
+fn register(root: &Path, server: &str, collection: Option<i64>, display: &str) -> Result<bool, String> {
+    let id = sync_root_id(collection)?;
+    let blob = match collection {
+        Some(c) => format!("{server}#{c}"),
+        None => server.to_string(),
+    };
     if id.is_registered().unwrap_or(false) {
         let info = id.info().map_err(text)?;
         let same_path = canonical(&info.path()).ok().as_deref() == Some(root);
-        if same_path && info.blob() == server.as_bytes() {
+        if same_path && info.blob() == blob.as_bytes() {
             return Ok(false);
         }
         // Anderer Ordner oder anderer Server: alte Anmeldung lösen (nur online
@@ -112,14 +135,14 @@ fn register(root: &Path, server: &str) -> Result<bool, String> {
         .map(|p| format!("{},0", p.display()))
         .unwrap_or_else(|_| "%SystemRoot%\\system32\\imageres.dll,-1043".into());
     let info = SyncRootInfo::default()
-        .with_display_name(DISPLAY_NAME)
+        .with_display_name(display)
         .with_hydration_type(HydrationType::Full)
         .with_hydration_policy(HydrationPolicy::AutoDehydrationAllowed)
         .with_allow_pinning(true)
         .with_population_type(PopulationType::AlwaysFull)
         .with_icon(icon)
         .with_version(env!("CARGO_PKG_VERSION"))
-        .with_blob(server.as_bytes())
+        .with_blob(blob.as_bytes())
         .with_path(root)
         .map_err(text)?;
     id.register(info).map_err(|e| format!("Sync-Ordner bei Windows anmelden: {e}"))?;
@@ -146,17 +169,25 @@ impl Drop for Mount {
     }
 }
 
+/// Sync-Ordner verbinden. `collection`: zugeordnete Sammlung (`None`: alle
+/// Sammlungen samt Eingang), `name`: ihr Name für den Explorer.
 pub fn mount(
     client: Client,
     server: &str,
     root: &Path,
     cache: &Path,
+    collection: Option<(i64, String)>,
     errors: Arc<Mutex<Option<String>>>,
 ) -> Result<Mount, String> {
     check_available()?;
     fs::create_dir_all(root).map_err(|e| format!("Ordner „{}“ anlegen: {e}", root.display()))?;
     let root = canonical(root).map_err(text)?;
-    let fresh = register(&root, server)?;
+    let display = match &collection {
+        Some((_, name)) => format!("{DISPLAY_NAME} – {name}"),
+        None => DISPLAY_NAME.to_string(),
+    };
+    let coll = collection.as_ref().map(|(c, _)| *c);
+    let fresh = register(&root, server, coll, &display)?;
     let docs = cache.join("docs");
     let uploads = cache.join("upload");
     for d in [&docs, &uploads] {
@@ -168,10 +199,20 @@ pub fn mount(
     }
 
     let (tx, rx) = mpsc::channel();
-    let filter = Filter { client: client.clone(), root: root.clone(), docs, wake: tx.clone(), download: Mutex::new(()) };
+    let filter = Filter {
+        client: client.clone(),
+        root: root.clone(),
+        inbox: coll.is_none(),
+        docs,
+        wake: tx.clone(),
+        download: Mutex::new(()),
+    };
     let connection = Session::new().connect(&root, filter).map_err(|e| format!("Sync-Ordner verbinden: {e}"))?;
     let local = WinLocal { root, uploads, counter: AtomicU64::new(0) };
-    let engine = Engine::new(client, local, Some(index));
+    let mut engine = Engine::new(client, local, Some(index));
+    if let Some(c) = coll {
+        engine = engine.scoped(c);
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let thread = std::thread::Builder::new()
@@ -410,6 +451,8 @@ impl LocalFs for WinLocal {
 pub struct Filter {
     client: Client,
     root: PathBuf,
+    /// Ordner mit „Eingang“ (alle Sammlungen)
+    inbox: bool,
     /// Zwischenspeicher geladener Fassungen (`<id>-v<version>`)
     docs: PathBuf,
     wake: Sender<()>,
@@ -422,9 +465,10 @@ impl Filter {
     }
 
     fn is_inbox(&self, path: &Path) -> bool {
-        path.strip_prefix(&self.root)
-            .ok()
-            .is_some_and(|r| r.components().count() == 1 && r.as_os_str().to_string_lossy().eq_ignore_ascii_case(INBOX_NAME))
+        self.inbox
+            && path.strip_prefix(&self.root).ok().is_some_and(|r| {
+                r.components().count() == 1 && r.as_os_str().to_string_lossy().eq_ignore_ascii_case(INBOX_NAME)
+            })
     }
 
     /// Fassung eines Dokuments im Zwischenspeicher bereitstellen
