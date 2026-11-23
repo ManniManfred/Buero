@@ -67,9 +67,15 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
     let collections = doc.collection_ids.clone();
     let tags = doc.tag_ids.clone();
     let snippet = doc.snippet.clone();
+    let is_audio = doc.kind == "audio";
+    let audio_url = c.api.file_url(&format!("/api/documents/{id}/file?v={}", doc.version));
+    let audio_title = doc.title.clone();
+    let p = crate::player::player();
+    let this_playing = move || p.doc.get() == Some(id) && p.playing.get();
 
     view! {
         <div class="row" class:selected=move || c.selected.get() == Some(id) class:checked=is_checked
+            class:playing=move || p.doc.get() == Some(id)
             draggable="true"
             on:dragstart=move |ev| {
                 // Mehrfachauswahl ziehen, sonst nur dieses Dokument
@@ -93,6 +99,15 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
                     Some(src) => view! { <img src=src loading="lazy" alt="" /> }.into_any(),
                     None => view! { <KindIcon kind=kind.clone() class="kind-icon" /> }.into_any(),
                 }}
+                {is_audio.then(|| view! {
+                    <button class="thumb-play" title=move || if this_playing() { "Pause" } else { "Abspielen" }
+                        on:click=move |ev| {
+                            ev.stop_propagation();
+                            crate::player::toggle(p, id, &audio_url, &audio_title);
+                        }>
+                        {move || if this_playing() { view! { <Icon name="pause" /> } } else { view! { <Icon name="play" /> } }}
+                    </button>
+                })}
             </div>
             <div class="row-body">
                 <div class="row-title">

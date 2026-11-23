@@ -281,7 +281,7 @@ fn tool_defs(perm: Perm) -> Value {
                     "query": { "type": "string", "description": "Suchtext, darf leer sein" },
                     "collection_id": { "type": "integer", "description": "Nur diese Sammlung (inkl. Untersammlungen)" },
                     "tag_id": { "type": "integer" },
-                    "kind": { "type": "string", "enum": ["pdf","image","word","spreadsheet","presentation","text","email","other"] },
+                    "kind": { "type": "string", "enum": ["pdf","image","word","spreadsheet","presentation","text","email","audio","video","other"] },
                     "unfiled": { "type": "boolean", "description": "Nur Dokumente ohne Sammlung (Eingang)" },
                     "sort": { "type": "string", "enum": ["relevance","newest","oldest","date_desc","date_asc"],
                               "description": "date_* = fachliches Dokumentdatum" },

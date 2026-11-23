@@ -14,6 +14,8 @@ pub const KINDS: &[(&str, &str)] = &[
     ("presentation", "Präsentationen"),
     ("text", "Text / Markdown"),
     ("email", "E-Mails"),
+    ("audio", "Audio"),
+    ("video", "Videos"),
     ("other", "Sonstige"),
 ];
 
@@ -27,9 +29,16 @@ pub fn kind_for(extension: &str, mime: &str) -> &'static str {
         "md" | "markdown" | "txt" | "text" | "log" | "json" | "xml" | "html" | "htm" | "yaml"
         | "yml" | "toml" | "ini" | "rs" | "py" | "js" | "ts" | "sh" => "text",
         "eml" | "msg" => "email",
+        // `.mpeg` ist in der Praxis meist MP3-Audio (Messenger, Diktiergeräte)
+        "mp3" | "mpeg" | "wav" | "ogg" | "oga" | "opus" | "m4a" | "aac" | "flac" | "wma" => "audio",
+        "mp4" | "m4v" | "webm" | "mov" | "mkv" | "avi" | "mpg" | "ogv" | "3gp" => "video",
         _ => {
             if mime.starts_with("image/") {
                 "image"
+            } else if mime.starts_with("audio/") {
+                "audio"
+            } else if mime.starts_with("video/") {
+                "video"
             } else if mime.starts_with("text/") {
                 "text"
             } else {

@@ -6,6 +6,7 @@
 mod api;
 mod components;
 mod dialog;
+mod player;
 mod icons;
 mod js;
 mod state;
@@ -41,6 +42,7 @@ enum Phase {
 fn App() -> impl IntoView {
     let c = Ctx::new();
     provide_context(c);
+    player::provide();
     let phase = RwSignal::new(Phase::Loading);
 
     let check = move || {
@@ -293,7 +295,8 @@ fn Main() -> impl IntoView {
     });
 
     view! {
-        <div class="layout" class:with-detail=move || c.selected.get().is_some()>
+        <div class="layout" class:with-detail=move || c.selected.get().is_some()
+            class:has-player=move || player::player().doc.get().is_some()>
             <Sidebar />
             <main class="main">
                 <Show when=move || !c.dashboard.get()
@@ -305,6 +308,7 @@ fn Main() -> impl IntoView {
             {move || c.selected.get().map(|id| view! { <DetailPanel id=id /> })}
         </div>
         <UploadPanel />
+        <player::PlayerBar />
         <DropOverlay />
         <Show when=move || c.show_settings.get()>
             <components::settings::Settings />

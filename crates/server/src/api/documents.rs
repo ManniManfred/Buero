@@ -86,6 +86,10 @@ pub async fn get(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<J
 }
 
 pub(crate) fn guess_mime(filename: &str, declared: Option<&str>) -> String {
+    // `.mpeg` ist meist MP3-Audio; als video/mpeg spielt es kein Browser ab
+    if util::extension_of(filename).eq_ignore_ascii_case("mpeg") {
+        return "audio/mpeg".to_string();
+    }
     match mime_guess::from_path(filename).first() {
         Some(m) => m.essence_str().to_string(),
         None => declared

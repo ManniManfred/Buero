@@ -147,6 +147,22 @@ fn DetailBody(
                 _ => {
                     if kind == "image" {
                         view! { <div class="preview img"><img src=file_url.clone() alt="" /></div> }.into_any()
+                    } else if kind == "audio" {
+                        view! {
+                            <div class="preview media audio">
+                                <crate::icons::KindIcon kind="audio" class="media-icon" />
+                                // Der Listen-Player pausiert, damit nicht zwei Stücke gleichzeitig laufen
+                                <audio controls preload="metadata" src=file_url.clone()
+                                    on:play=move |_| crate::player::pause()></audio>
+                            </div>
+                        }.into_any()
+                    } else if kind == "video" {
+                        view! {
+                            <div class="preview media">
+                                <video controls preload="metadata" src=file_url.clone()
+                                    on:play=move |_| crate::player::pause()></video>
+                            </div>
+                        }.into_any()
                     } else if previewable {
                         view! { <iframe class="preview" src=file_url.clone()></iframe> }.into_any()
                     } else {
