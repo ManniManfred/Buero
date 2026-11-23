@@ -64,6 +64,17 @@ pub fn MailSection() -> impl IntoView {
             }
         });
     };
+    let cancel = move |id: i64| {
+        spawn_local(async move {
+            match c.api.send_empty::<()>("POST", &format!("/api/mail/accounts/{id}/cancel"), None).await {
+                Ok(()) => {
+                    c.notify("Abruf wird abgebrochen – Übernommenes bleibt erhalten", false);
+                    load();
+                }
+                Err(e) => c.notify(e, true),
+            }
+        });
+    };
     let remove = move |a: MailAccount| {
         spawn_local(async move {
             if !dialog::confirm(format!("Postfach „{}“ entfernen?", a.name), "Büro ruft dann keine Mails mehr daraus ab. Bereits übernommene Mails bleiben erhalten.")
@@ -120,9 +131,21 @@ pub fn MailSection() -> impl IntoView {
                         })}
                         {a.last_error.clone().filter(|_| !a.running).map(|e| view! { <div class="small bad-text">{e}</div> })}
                     </div>
-                    <button title="Jetzt abrufen" disabled=a.running || a.folders.is_empty() on:click=move |_| run(a.id)>
-                        <Icon name="download" />"Abrufen"
-                    </button>
+                    {if a.running {
+                        let cancelling = a.progress.as_ref().is_some_and(|p| p.phase.starts_with("Wird abgebrochen"));
+                        view! {
+                            <button class="danger" title="Abruf nach der aktuellen Mail beenden; Übernommenes bleibt"
+                                disabled=cancelling on:click=move |_| cancel(a.id)>
+                                <Icon name="x" />"Abbrechen"
+                            </button>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <button title="Jetzt abrufen" disabled=a.folders.is_empty() on:click=move |_| run(a.id)>
+                                <Icon name="download" />"Abrufen"
+                            </button>
+                        }.into_any()
+                    }}
                     <button class="icon" title="Bearbeiten" on:click={
                         let a = a.clone();
                         move |_| editing.set(Some(Some(a.clone())))

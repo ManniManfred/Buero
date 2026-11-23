@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/mail/accounts/{id}", axum::routing::patch(mail::update).delete(mail::delete))
         .route("/api/mail/accounts/{id}/folders", post(mail::folders))
         .route("/api/mail/accounts/{id}/run", post(mail::run))
+        .route("/api/mail/accounts/{id}/cancel", post(mail::cancel))
         .route("/api/mail/in-collection/{id}", get(mail::count_in))
         .route("/api/mail/move", post(mail::move_mails))
         .route("/api/collections", get(collections::list).post(collections::create))

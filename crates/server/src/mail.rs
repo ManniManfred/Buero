@@ -53,11 +53,37 @@ fn set_progress(account: i64, f: impl FnOnce(&mut shared::MailProgress)) {
     }
 }
 
+/// Postfächer, deren laufender Abruf abgebrochen werden soll
+static CANCEL: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+const CANCELLED: &str = "Abruf abgebrochen";
+
+/// Laufenden Abruf abbrechen; `false`, wenn keiner läuft
+pub fn cancel(account: i64) -> bool {
+    if !is_running(account) {
+        return false;
+    }
+    let mut c = CANCEL.lock().unwrap();
+    if !c.contains(&account) {
+        c.push(account);
+    }
+    set_progress(account, |p| p.phase = "Wird abgebrochen …".into());
+    true
+}
+
+/// Bei Abbruch mit Fehler `CANCELLED` aussteigen
+fn check_cancel(account: i64) -> Result<()> {
+    if CANCEL.lock().unwrap().contains(&account) {
+        bail!(CANCELLED);
+    }
+    Ok(())
+}
+
 struct Guard(i64);
 impl Drop for Guard {
     fn drop(&mut self) {
         RUNNING.lock().unwrap().retain(|a| *a != self.0);
         PROGRESS.lock().unwrap().retain(|p| p.0 != self.0);
+        CANCEL.lock().unwrap().retain(|a| *a != self.0);
     }
 }
 
@@ -67,6 +93,7 @@ fn try_start(account: i64) -> Option<Guard> {
         return None;
     }
     r.push(account);
+    CANCEL.lock().unwrap().retain(|a| *a != account);
     Some(Guard(account))
 }
 
@@ -185,6 +212,10 @@ pub async fn run(st: &AppState, account_id: i64) -> Result<usize> {
     };
     let (err, n) = match &res {
         Ok(n) => (None, *n as i64),
+        // Abgebrochen: kein Fehler, Übernommenes zählt
+        Err(e) if e.chain().any(|c| c.to_string() == CANCELLED) => {
+            (None, progress(account_id).map(|p| p.imported).unwrap_or(0))
+        }
         Err(e) => (Some(format!("{e:#}")), 0),
     };
     sqlx::query("UPDATE mail_accounts SET last_run = ?, last_error = ?, last_imported = ? WHERE id = ?")
@@ -234,6 +265,10 @@ async fn run_inner(st: &AppState, account_id: i64) -> Result<usize> {
             p.done = 0;
             p.total = 0;
         });
+        if let Err(e) = check_cancel(account_id) {
+            let _ = s.logout().await;
+            return Err(e);
+        }
         match folder(st, &mut s, account_id, f, &mut known).await {
             Ok(n) => imported += n,
             Err(e) => {
@@ -273,6 +308,7 @@ async fn folder(st: &AppState, s: &mut Session, account: i64, f: &Folder, known:
         p.total = uids.len() as i64;
     });
     for chunk in uids.chunks(50) {
+        check_cancel(account)?;
         let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let wanted: Vec<u32> = if f.mode == "replies" {
             let heads: Vec<_> = s
@@ -321,6 +357,7 @@ async fn folder(st: &AppState, s: &mut Session, account: i64, f: &Folder, known:
             p.total = rows.len() as i64;
         });
         for chunk in rows.chunks(10) {
+            check_cancel(account)?;
             // OR-Kette: (OR (OR a b) c) …
             let mut q = String::new();
             for (i, (_, mid)) in chunk.iter().enumerate() {
@@ -363,6 +400,7 @@ async fn fetch_and_import(
         let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let msgs: Vec<_> = s.uid_fetch(&set, "(UID BODY.PEEK[])").await?.try_collect().await?;
         for m in &msgs {
+            check_cancel(ctx.account)?;
             if ctx.count {
                 set_progress(ctx.account, |p| p.done += 1);
             }

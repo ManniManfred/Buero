@@ -234,6 +234,15 @@ pub async fn move_mails(State(st): State<AppState>, Json(m): Json<shared::MailMo
     Ok(Json(mails.len() as i64))
 }
 
+/// Laufenden Abruf abbrechen (er endet nach der aktuellen Mail)
+pub async fn cancel(Path(id): Path<i64>) -> AppResult<StatusCode> {
+    if crate::mail::cancel(id) {
+        Ok(StatusCode::ACCEPTED)
+    } else {
+        Err(AppError::new(StatusCode::CONFLICT, "Es läuft kein Abruf"))
+    }
+}
+
 pub async fn email_info(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<EmailInfo>> {
     Ok(Json(crate::email::info(&st, id).await?))
 }
