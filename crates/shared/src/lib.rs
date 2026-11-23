@@ -594,7 +594,34 @@ pub struct MailFolder {
     pub name: String,
     /// "all" | "replies"
     pub mode: String,
+    /// Feste Sammlung für diesen Ordner; sonst die des Postfachs
     pub collection_id: Option<i64>,
+    /// Ohne feste Sammlung: eigene Unter-Sammlung (Name des Ordners) in der
+    /// Sammlung des Postfachs anlegen statt direkt dort ablegen
+    #[serde(default = "yes")]
+    pub own_collection: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Name der Unter-Sammlung für einen IMAP-Ordner:
+/// `INBOX` → „Posteingang“, `[Gmail]/Gesendet` → „Gesendet“, `INBOX.Rechnungen` → „Rechnungen“
+pub fn mail_folder_collection_name(name: &str) -> String {
+    let label = imap_folder_label(name);
+    if label.eq_ignore_ascii_case("INBOX") {
+        return "Posteingang".into();
+    }
+    let leaf = match label.rsplit_once('/') {
+        Some((_, l)) => l,
+        None => match label.get(..6) {
+            Some(p) if p.eq_ignore_ascii_case("INBOX.") => &label[6..],
+            _ => &label,
+        },
+    };
+    let leaf = leaf.trim();
+    if leaf.is_empty() { label.trim().to_string() } else { leaf.to_string() }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -697,5 +724,9 @@ mod tests {
         assert_eq!(super::imap_folder_label("A&-B"), "A&B");
         assert_eq!(super::imap_folder_label("Gel&APY-schte Elemente"), "Gelöschte Elemente");
         assert_eq!(super::imap_folder_label("&ZeVnLIqe-"), "日本語");
+        assert_eq!(super::mail_folder_collection_name("INBOX"), "Posteingang");
+        assert_eq!(super::mail_folder_collection_name("[Gmail]/Gesendet"), "Gesendet");
+        assert_eq!(super::mail_folder_collection_name("INBOX.Rechnungen"), "Rechnungen");
+        assert_eq!(super::mail_folder_collection_name("Gel&APY-schte Elemente"), "Gelöschte Elemente");
     }
 }

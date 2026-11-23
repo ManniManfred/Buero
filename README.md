@@ -58,8 +58,11 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
   mehrere Postfächer): je Ordner „Alle Mails“ (z. B. ein eigener Ordner
   „Büro“) oder „Nur Antworten“ (z. B. „Gesendet“ und Posteingang – nur Mails
   zu Konversationen, die schon in Büro liegen; ältere Antworten werden
-  nachgesucht, wenn eine Konversation später dazukommt). Büro liest nur:
-  nichts wird verschoben oder als gelesen markiert.
+  nachgesucht, wenn eine Konversation später dazukommt). Jeder Ordner bekommt
+  in der Sammlung des Postfachs automatisch eine eigene **Unter-Sammlung**
+  (z. B. „Mails › Posteingang“, „Mails › Gesendet“); wahlweise landen seine
+  Mails direkt in der Sammlung des Postfachs oder in einer beliebigen anderen.
+  Büro liest nur: nichts wird verschoben oder als gelesen markiert.
 - **Verknüpfungen**: Dokumente lassen sich als **Unterdokument** einem anderen
   unterordnen (Mail-Anhänge automatisch) oder gegenseitig **verweisen** – in der
   Detailansicht unter „Verknüpfungen“ oder per Drag & Drop eines Dokuments auf

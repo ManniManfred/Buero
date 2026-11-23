@@ -31,7 +31,16 @@ pub fn MailSection() -> impl IntoView {
     let load = move || {
         spawn_local(async move {
             match c.api.get::<Vec<MailAccount>>("/api/mail/accounts").await {
-                Ok(a) => accounts.set(a),
+                Ok(a) => {
+                    // Abruf fertig: neue Sammlungen und Dokumente anzeigen
+                    let was = accounts.with_untracked(|o| o.iter().any(|x| x.running));
+                    let now = a.iter().any(|x| x.running);
+                    accounts.set(a);
+                    if was && !now {
+                        c.load_meta();
+                        c.reload();
+                    }
+                }
                 Err(e) => c.notify(e, true),
             }
         });
@@ -197,7 +206,8 @@ fn AccountEditor(account: Option<MailAccount>, on_done: Callback<()>) -> impl In
                 name: f.name.clone(),
                 special: String::new(),
                 mode: RwSignal::new(f.mode.clone()),
-                collection: RwSignal::new(f.collection_id.unwrap_or(0)),
+                // 0 = eigene Unter-Sammlung, -1 = direkt in die Sammlung des Postfachs
+                collection: RwSignal::new(f.collection_id.unwrap_or(if f.own_collection { 0 } else { -1 })),
             })
             .collect::<Vec<_>>(),
     );
@@ -223,6 +233,7 @@ fn AccountEditor(account: Option<MailAccount>, on_done: Callback<()>) -> impl In
                     name: f.name.clone(),
                     mode: f.mode.get_untracked(),
                     collection_id: Some(f.collection.get_untracked()).filter(|c| *c > 0),
+                    own_collection: f.collection.get_untracked() != -1,
                 })
                 .collect()
         })
@@ -423,9 +434,10 @@ fn AccountEditor(account: Option<MailAccount>, on_done: Callback<()>) -> impl In
                                     <option value="replies" selected=move || mode.get() == "replies">"Nur Antworten"</option>
                                 </select>
                                 <Show when=move || !mode.get().is_empty()>
-                                    <select title="Sammlung für diesen Ordner (sonst die des Postfachs)"
+                                    <select title="Wohin die Mails dieses Ordners kommen. Unter-Sammlungen werden in der Sammlung des Postfachs angelegt (ohne Sammlung: Eingang)."
                                         on:change=move |ev| coll.set(event_target_value(&ev).parse().unwrap_or(0))>
-                                        <option value="0" selected=move || coll.get() == 0>"Sammlung wie Postfach"</option>
+                                        <option value="0" selected=move || coll.get() == 0>{format!("↳ {} (Unter-Sammlung)", shared::mail_folder_collection_name(&f.name))}</option>
+                                        <option value="-1" selected=move || coll.get() == -1>"Sammlung des Postfachs"</option>
                                         {move || coll_options().into_iter().map(|(v, l)| {
                                             view! { <option value=v.to_string() selected=move || coll.get() == v>{l}</option> }
                                         }).collect_view()}

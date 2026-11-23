@@ -24,8 +24,8 @@ pub async fn list(State(st): State<AppState>) -> AppResult<Json<Vec<MailAccount>
     )
     .fetch_all(&st.pool)
     .await?;
-    let folders: Vec<(i64, String, String, Option<i64>)> =
-        sqlx::query_as("SELECT account_id, name, mode, collection_id FROM mail_folders ORDER BY id")
+    let folders: Vec<(i64, String, String, Option<i64>, bool)> =
+        sqlx::query_as("SELECT account_id, name, mode, collection_id, own_collection <> 0 FROM mail_folders ORDER BY id")
             .fetch_all(&st.pool)
             .await?;
     Ok(Json(
@@ -50,7 +50,12 @@ pub async fn list(State(st): State<AppState>) -> AppResult<Json<Vec<MailAccount>
                         folders: folders
                             .iter()
                             .filter(|f| f.0 == id)
-                            .map(|f| MailFolder { name: f.1.clone(), mode: f.2.clone(), collection_id: f.3 })
+                            .map(|f| MailFolder {
+                                name: f.1.clone(),
+                                mode: f.2.clone(),
+                                collection_id: f.3,
+                                own_collection: f.4,
+                            })
                             .collect(),
                     }
                 },
@@ -132,13 +137,17 @@ async fn set_folders(st: &AppState, account: i64, folders: Vec<MailFolder>) -> A
     for f in folders {
         let mode = if f.mode == "replies" { "replies" } else { "all" };
         sqlx::query(
-            "INSERT INTO mail_folders (account_id, name, mode, collection_id) VALUES (?, ?, ?, ?) \
-             ON CONFLICT (account_id, name) DO UPDATE SET mode = excluded.mode, collection_id = excluded.collection_id",
+            "INSERT INTO mail_folders (account_id, name, mode, collection_id, own_collection) VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT (account_id, name) DO UPDATE SET mode = excluded.mode, collection_id = excluded.collection_id, \
+             own_collection = excluded.own_collection, \
+             resort = CASE WHEN excluded.own_collection = 1 AND own_collection = 0 AND excluded.collection_id IS NULL \
+                      THEN 1 ELSE resort END",
         )
         .bind(account)
         .bind(&f.name)
         .bind(mode)
         .bind(f.collection_id.filter(|c| *c > 0))
+        .bind(f.own_collection)
         .execute(&st.pool)
         .await?;
     }

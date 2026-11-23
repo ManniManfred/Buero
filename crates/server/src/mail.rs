@@ -195,6 +195,8 @@ struct Folder {
     uid_validity: Option<i64>,
     last_uid: i64,
     last_seq: i64,
+    /// Schon übernommene Mails in die Unter-Sammlung einsortieren
+    resort: bool,
 }
 
 /// IMAP-Strings in Anführungszeichen
@@ -230,8 +232,8 @@ pub async fn run(st: &AppState, account_id: i64) -> Result<usize> {
 
 async fn run_inner(st: &AppState, account_id: i64) -> Result<usize> {
     let a = load_account(st, account_id).await?.context("Postfach nicht gefunden")?;
-    let rows: Vec<(i64, String, String, Option<i64>, i64, i64)> = sqlx::query_as(
-        "SELECT id, name, mode, uid_validity, last_uid, last_seq FROM mail_folders \
+    let rows: Vec<(i64, String, String, Option<i64>, i64, i64, bool)> = sqlx::query_as(
+        "SELECT id, name, mode, uid_validity, last_uid, last_seq, resort <> 0 FROM mail_folders \
          WHERE account_id = ? ORDER BY mode = 'replies', id",
     )
     .bind(account_id)
@@ -242,13 +244,14 @@ async fn run_inner(st: &AppState, account_id: i64) -> Result<usize> {
     }
     let folders: Vec<Folder> = rows
         .into_iter()
-        .map(|(id, name, mode, uid_validity, last_uid, last_seq)| Folder {
+        .map(|(id, name, mode, uid_validity, last_uid, last_seq, resort)| Folder {
             id,
             name,
             mode,
             uid_validity,
             last_uid,
             last_seq,
+            resort,
         })
         .collect();
     set_progress(account_id, |p| p.phase = "Verbinden …".into());
@@ -294,6 +297,10 @@ async fn folder(st: &AppState, s: &mut Session, account: i64, f: &Folder, known:
     }
     let mut imported = 0;
     let ctx = ImportCtx { account, folder: f.id, count: f.mode != "replies" };
+
+    if f.resort {
+        resort(st, s, account, f).await?;
+    }
 
     // Neue Mails seit dem letzten Abruf
     let mut uids: Vec<u32> = s
@@ -425,14 +432,122 @@ struct ImportCtx {
 }
 
 async fn target_collection(st: &AppState, ctx: &ImportCtx) -> Result<Option<i64>> {
-    Ok(sqlx::query_scalar(
-        "SELECT COALESCE(f.collection_id, a.collection_id) FROM mail_folders f \
-         JOIN mail_accounts a ON a.id = f.account_id WHERE f.id = ?",
+    Ok(folder_target(st, ctx.folder).await?.1)
+}
+
+/// (Sammlung des Postfachs, Ziel-Sammlung) eines Ordners; legt die
+/// Unter-Sammlung des Ordners bei Bedarf an
+async fn folder_target(st: &AppState, folder: i64) -> Result<(Option<i64>, Option<i64>)> {
+    let row: Option<(Option<i64>, Option<i64>, bool, Option<i64>, String)> = sqlx::query_as(
+        "SELECT f.collection_id, a.collection_id, f.own_collection <> 0, f.auto_collection_id, f.name \
+         FROM mail_folders f JOIN mail_accounts a ON a.id = f.account_id WHERE f.id = ?",
     )
-    .bind(ctx.folder)
+    .bind(folder)
     .fetch_optional(&st.pool)
-    .await?
-    .flatten())
+    .await?;
+    let Some((fixed, account, own, auto, name)) = row else { return Ok((None, None)) };
+    let target = match (fixed, account) {
+        (Some(c), _) => Some(c),
+        (None, None) => None,
+        (None, Some(a)) if !own => Some(a),
+        (None, Some(a)) => Some(sub_collection(st, folder, a, auto, &name).await?),
+    };
+    Ok((account, target))
+}
+
+/// Unter-Sammlung eines Ordners in der Sammlung des Postfachs (auch nach
+/// Umbenennen dieselbe; sonst per Name gefunden oder neu angelegt)
+async fn sub_collection(st: &AppState, folder: i64, parent: i64, auto: Option<i64>, name: &str) -> Result<i64> {
+    if let Some(id) = auto {
+        let p: Option<Option<i64>> =
+            sqlx::query_scalar("SELECT parent_id FROM collections WHERE id = ?").bind(id).fetch_optional(&st.pool).await?;
+        if p == Some(Some(parent)) {
+            return Ok(id);
+        }
+    }
+    let label = shared::mail_folder_collection_name(name);
+    sqlx::query("INSERT OR IGNORE INTO collections (parent_id, name, color, created_at) VALUES (?, ?, NULL, ?)")
+        .bind(parent)
+        .bind(&label)
+        .bind(now())
+        .execute(&st.pool)
+        .await?;
+    let id: i64 = sqlx::query_scalar("SELECT id FROM collections WHERE parent_id = ? AND name = ?")
+        .bind(parent)
+        .bind(&label)
+        .fetch_one(&st.pool)
+        .await?;
+    sqlx::query("UPDATE mail_folders SET auto_collection_id = ? WHERE id = ?").bind(id).bind(folder).execute(&st.pool).await?;
+    Ok(id)
+}
+
+/// Schon übernommene Mails dieses Ordners (samt Anhängen) aus der Sammlung
+/// des Postfachs in die Unter-Sammlung verschieben; liest nur Message-IDs
+async fn resort(st: &AppState, s: &mut Session, account: i64, f: &Folder) -> Result<()> {
+    let (Some(from), Some(to)) = folder_target(st, f.id).await? else {
+        return clear_resort(st, f.id).await;
+    };
+    if from == to {
+        return clear_resort(st, f.id).await;
+    }
+    let mut uids: Vec<u32> = s.uid_search("ALL").await?.into_iter().collect();
+    uids.sort_unstable();
+    set_progress(account, |p| {
+        p.phase = "Vorhandene Mails einsortieren".into();
+        p.done = 0;
+        p.total = uids.len() as i64;
+    });
+    let mut moved = 0usize;
+    for chunk in uids.chunks(200) {
+        check_cancel(account)?;
+        let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let heads: Vec<_> = s.uid_fetch(&set, "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])").await?.try_collect().await?;
+        let mut docs: Vec<i64> = Vec::new();
+        for h in &heads {
+            let Some(raw) = h.header() else { continue };
+            let (Some(mid), _) = crate::email::header_ids(raw) else { continue };
+            let ids: Vec<i64> = sqlx::query_scalar(
+                "SELECT d.id FROM emails e JOIN documents d ON d.id = e.document_id OR d.parent_id = e.document_id \
+                 WHERE e.message_id = ? AND EXISTS (SELECT 1 FROM document_collections dc \
+                 WHERE dc.document_id = d.id AND dc.collection_id = ?)",
+            )
+            .bind(&mid)
+            .bind(from)
+            .fetch_all(&st.pool)
+            .await?;
+            docs.extend(ids);
+        }
+        docs.sort_unstable();
+        docs.dedup();
+        if !docs.is_empty() {
+            let mut tx = st.pool.begin().await?;
+            for d in &docs {
+                sqlx::query("DELETE FROM document_collections WHERE document_id = ? AND collection_id = ?")
+                    .bind(d)
+                    .bind(from)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) VALUES (?, ?)")
+                    .bind(d)
+                    .bind(to)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+            st.reindex(&docs).await?;
+            moved += docs.len();
+        }
+        set_progress(account, |p| p.done += chunk.len() as i64);
+    }
+    if moved > 0 {
+        tracing::info!("Mail-Abruf Postfach {account}: {moved} Dokument(e) in Unter-Sammlung einsortiert");
+    }
+    clear_resort(st, f.id).await
+}
+
+async fn clear_resort(st: &AppState, folder: i64) -> Result<()> {
+    sqlx::query("UPDATE mail_folders SET resort = 0 WHERE id = ?").bind(folder).execute(&st.pool).await?;
+    Ok(())
 }
 
 async fn import(st: &AppState, raw: &[u8], ctx: &ImportCtx, known: &mut HashSet<String>) -> Result<bool> {
