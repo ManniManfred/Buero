@@ -43,7 +43,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      # Liest den Cache, den cache.yml auf master anlegt (Tag-Läufe sehen nur
+      # Caches des Default-Branches); eigene Caches der Tags wären nutzlos
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - uses: taiki-e/install-action@v2
         with:
           tool: trunk,tauri-cli,cargo-about
@@ -115,8 +120,10 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: BUERO_VERSION=${{ github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Cache in der Registry statt type=gha: GitHub-Caches eines Tags sind
+          # für den nächsten Tag unsichtbar, so baute jeder Release kalt
+          cache-from: type=registry,ref=${{ steps.name.outputs.repo }}:buildcache
+          cache-to: type=registry,ref=${{ steps.name.outputs.repo }}:buildcache,mode=max
 
   deploy:
     needs: image

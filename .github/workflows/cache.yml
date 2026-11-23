@@ -1,0 +1,56 @@
+name: Rust-Cache für Releases vorwärmen
+
+# GitHub-Caches gehören zu einem Ref. Ein Release-Lauf (Tag v1.2.3) kann nur
+# Caches seines eigenen Tags oder des Default-Branches lesen – ohne diesen
+# Workflow baute deshalb jeder Release alle Abhängigkeiten neu.
+# Hier wird auf master gebaut und der Cache gespeichert, den release.yml
+# liest (gleicher shared-key). Gespeichert werden nur die Abhängigkeiten, die
+# sich selten ändern; daher reicht es, nach Änderungen an Cargo.lock und
+# einmal pro Woche zu laufen (ungenutzte Caches löscht GitHub nach 7 Tagen).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - Cargo.lock
+      - .github/workflows/cache.yml
+      - .github/workflows/release.yml
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux-Abhängigkeiten
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop
+      # Dieselben Builds wie `cargo tauri build` (Weboberfläche per trunk,
+      # Desktop mit custom-protocol); die Oberfläche selbst wird nicht gebraucht
+      - name: Abhängigkeiten bauen
+        shell: bash
+        run: |
+          mkdir -p crates/web/dist
+          cargo build --release -p web --target wasm32-unknown-unknown
+          cargo build --release -p buero-desktop --features custom-protocol
