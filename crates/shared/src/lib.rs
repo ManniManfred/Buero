@@ -84,6 +84,9 @@ pub struct DocumentSummary {
     /// Anzahl direkter Unterdokumente
     #[serde(default)]
     pub child_count: i64,
+    /// Absender (nur bei E-Mails)
+    #[serde(default)]
+    pub email_from: Option<String>,
     /// HTML-Snippet mit `<b>`-Hervorhebungen (nur bei Suche)
     pub snippet: Option<String>,
     pub score: Option<f32>,

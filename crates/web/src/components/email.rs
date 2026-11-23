@@ -22,7 +22,7 @@ fn load(id: i64, info: RwSignal<Option<EmailInfo>>) {
 }
 
 /// Name ohne Adresse („Max Muster <max@…>“ → „Max Muster“)
-fn short(sender: &str) -> String {
+pub(crate) fn short(sender: &str) -> String {
     match sender.split_once(" <") {
         Some((n, _)) if !n.trim().is_empty() => n.trim().trim_matches('"').to_string(),
         _ => sender.to_string(),

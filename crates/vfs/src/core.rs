@@ -1347,6 +1347,7 @@ mod tests {
             parent_id: None,
             parent_title: None,
             child_count: 0,
+            email_from: None,
             snippet: None,
             score: None,
         }

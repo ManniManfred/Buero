@@ -144,6 +144,12 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
                 })}
                 {snippet.map(|s| view! { <div class="snippet" inner_html=s></div> })}
                 <div class="meta">
+                    {doc.email_from.clone().map(|f| view! {
+                        <span class="sender" title=f.clone()>
+                            <Icon name="email" class="sm" />
+                            <span class="ellipsis">{crate::components::email::short(&f)}</span>
+                        </span>
+                    })}
                     <span>{date}</span>
                     <span>{format_size(doc.size)}</span>
                     {doc.page_count.filter(|p| *p > 1).map(|p| view! { <span>{format!("{p} Seiten")}</span> })}
