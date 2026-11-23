@@ -114,15 +114,27 @@ impl Client {
 
     /// Alle Dokumente (seitenweise geladen)
     pub fn all_documents(&self) -> ApiResult<Vec<DocumentSummary>> {
-        const PAGE: usize = 1000;
-        let mut out = Vec::new();
+        // Der Server liefert höchstens 500 je Seite (auch wenn mehr verlangt
+        // wird). Deshalb nicht an der Seitengröße erkennen, ob Schluss ist,
+        // sondern an `total`.
+        const PAGE: usize = 500;
+        let mut out: Vec<DocumentSummary> = Vec::new();
         loop {
             let r: ListResponse =
                 self.get(&format!("/api/documents?sort=oldest&limit={PAGE}&offset={}", out.len()))?;
             let n = r.items.len();
             out.extend(r.items);
-            if n < PAGE || out.len() as u64 >= r.total {
+            if out.len() as u64 >= r.total {
                 return Ok(out);
+            }
+            if n == 0 {
+                // Unvollständig (z. B. währenddessen gelöscht): lieber diesmal
+                // nicht abgleichen, als lokal Dateien als „am Server entfernt“
+                // wegzuräumen
+                return Err(ApiError {
+                    status: None,
+                    message: format!("Dokumentliste unvollständig ({} von {})", out.len(), r.total),
+                });
             }
         }
     }
