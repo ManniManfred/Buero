@@ -64,7 +64,7 @@ Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crat
     **und** *Steuererklärung 2026* **und** *Wohnung*). Filtern nach einer Sammlung
     zeigt deren eigene Dokumente; mit „inkl. Untersammlungen“ auch alles aus
     ihren Untersammlungen.
-    In der Seitenleiste sind anfangs die ersten beiden Ebenen zu sehen; ab mehr
+    In der Seitenleiste ist anfangs nur die oberste Ebene zu sehen; ab mehr
     als fünf Sammlungen hilft ein Suchfeld, eine Sammlung samt Pfad zu finden.
     Sammlungen lassen sich im Baum per Drag & Drop verschieben: auf eine andere
     Sammlung ziehen macht sie zur Untersammlung, auf die Überschrift

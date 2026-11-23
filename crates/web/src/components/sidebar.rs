@@ -263,9 +263,10 @@ pub fn Sidebar() -> impl IntoView {
     }
 }
 
-/// Standard beim Start: nur die oberste Ebene aufgeklappt (Ebene 1 und 2 sichtbar)
-fn open_by_default(depth: usize) -> bool {
-    depth == 0
+/// Standard beim Start: alles zugeklappt, nur die oberste Ebene sichtbar
+/// (aufgeklappt wird nur der Weg zur gewählten Sammlung)
+fn open_by_default(_depth: usize) -> bool {
+    false
 }
 
 /// Ist eine Sammlung ohne Klick zugeklappt?
