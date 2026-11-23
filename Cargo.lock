@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "buero-desktop"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "buero-vfs",
  "serde",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "buero-server"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "buero-vfs"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "cloud-filter",
  "fuser",
@@ -5921,7 +5921,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde",
 ]
@@ -7846,7 +7846,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "console_error_panic_hook",
  "gloo-net",
