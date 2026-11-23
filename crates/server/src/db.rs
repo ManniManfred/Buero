@@ -46,10 +46,11 @@ pub struct DocRow {
     pub extract_error: Option<String>,
     pub page_count: Option<i64>,
     pub has_thumbnail: bool,
+    pub parent_id: Option<i64>,
 }
 
 pub const DOC_COLS: &str = "id, title, description, original_filename, mime, extension, size, sha256, \
-    version, created_at, updated_at, document_date, extract_status, extract_error, page_count, has_thumbnail";
+    version, created_at, updated_at, document_date, extract_status, extract_error, page_count, has_thumbnail, parent_id";
 
 impl DocRow {
     pub fn summary(&self, collection_ids: Vec<i64>, tag_ids: Vec<i64>) -> DocumentSummary {
@@ -69,6 +70,9 @@ impl DocRow {
             has_thumbnail: self.has_thumbnail,
             collection_ids,
             tag_ids,
+            parent_id: self.parent_id,
+            parent_title: None,
+            child_count: 0,
             snippet: None,
             score: None,
         }
@@ -130,11 +134,29 @@ pub async fn summaries(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Docum
     }
     let mut colls = memberships(pool, "document_collections", "collection_id", ids).await?;
     let mut tags = memberships(pool, "document_tags", "tag_id", ids).await?;
+    // Unterdokumente zählen, Titel der übergeordneten Dokumente
+    let mut children: HashMap<i64, i64> = HashMap::new();
+    let parents: Vec<i64> = rows.values().filter_map(|r| r.parent_id).collect();
+    let mut parent_titles: HashMap<i64, String> = HashMap::new();
+    for chunk in ids.chunks(500) {
+        let mut qb = QueryBuilder::<Sqlite>::new("SELECT parent_id, COUNT(*) FROM documents WHERE parent_id IN ");
+        push_ids(&mut qb, chunk);
+        qb.push(" GROUP BY parent_id");
+        children.extend(qb.build_query_as::<(i64, i64)>().fetch_all(pool).await?);
+    }
+    for chunk in parents.chunks(500) {
+        let mut qb = QueryBuilder::<Sqlite>::new("SELECT id, title FROM documents WHERE id IN ");
+        push_ids(&mut qb, chunk);
+        parent_titles.extend(qb.build_query_as::<(i64, String)>().fetch_all(pool).await?);
+    }
     Ok(ids
         .iter()
         .filter_map(|id| {
             rows.get(id).map(|r| {
-                r.summary(colls.remove(id).unwrap_or_default(), tags.remove(id).unwrap_or_default())
+                let mut s = r.summary(colls.remove(id).unwrap_or_default(), tags.remove(id).unwrap_or_default());
+                s.child_count = children.get(id).copied().unwrap_or(0);
+                s.parent_title = r.parent_id.and_then(|p| parent_titles.get(&p).cloned());
+                s
             })
         })
         .collect())
@@ -229,16 +251,16 @@ pub async fn index_docs(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Inde
     let mut out = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(200) {
         let mut qb = QueryBuilder::<Sqlite>::new(
-            "SELECT id, title, original_filename, description, content, extension, mime, created_at, document_date \
-             FROM documents WHERE id IN ",
+            "SELECT id, title, original_filename, description, content, extension, mime, created_at, document_date, \
+             parent_id IS NOT NULL FROM documents WHERE id IN ",
         );
         push_ids(&mut qb, chunk);
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(i64, String, String, String, String, String, String, i64, Option<String>)> =
+        let rows: Vec<(i64, String, String, String, String, String, String, i64, Option<String>, bool)> =
             qb.build_query_as().fetch_all(pool).await?;
         let colls = memberships(pool, "document_collections", "collection_id", chunk).await?;
         let tags = memberships(pool, "document_tags", "tag_id", chunk).await?;
-        for (id, title, filename, description, content, ext, mime, created, date) in rows {
+        for (id, title, filename, description, content, ext, mime, created, date, is_child) in rows {
             let direct = colls.get(&id).cloned().unwrap_or_default();
             let all = with_ancestors(&tree, &direct);
             let tag_ids = tags.get(&id).cloned().unwrap_or_default();
@@ -256,6 +278,7 @@ pub async fn index_docs(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Inde
                 kind: shared::kind_for(&ext, &mime).to_string(),
                 created,
                 date: date.as_deref().and_then(util::date_to_ts).unwrap_or(created),
+                is_child,
             });
         }
     }
@@ -291,4 +314,21 @@ pub async fn sha_in_use(pool: &SqlitePool, sha: &str) -> sqlx::Result<bool> {
         .fetch_one(pool)
         .await?;
     Ok(n > 0)
+}
+
+/// Alle Unterdokumente (beliebig tief) der angegebenen Dokumente, ohne diese selbst
+pub async fn descendants_of(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut qb = QueryBuilder::<Sqlite>::new(
+        "WITH RECURSIVE d(id) AS (SELECT id FROM documents WHERE parent_id IN ",
+    );
+    push_ids(&mut qb, ids);
+    qb.push(" UNION SELECT x.id FROM documents x JOIN d ON x.parent_id = d.id) SELECT id FROM d");
+    let mut out: Vec<i64> = qb.build_query_scalar().fetch_all(pool).await?;
+    out.retain(|i| !ids.contains(i));
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
 }

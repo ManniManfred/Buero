@@ -81,6 +81,10 @@ pub fn menu(title: impl Into<String>, choices: Vec<Choice>) -> Dialog {
 }
 
 impl Dialog {
+    pub fn text(mut self, t: impl Into<String>) -> Self {
+        self.text = t.into();
+        self
+    }
     pub fn ok(mut self, label: impl Into<String>) -> Self {
         self.ok = label.into();
         self

@@ -1344,6 +1344,9 @@ mod tests {
             has_thumbnail: false,
             collection_ids: colls.to_vec(),
             tag_ids: vec![],
+            parent_id: None,
+            parent_title: None,
+            child_count: 0,
             snippet: None,
             score: None,
         }

@@ -234,14 +234,17 @@ fn DetailBody(
                 });
             } />
             <button class="danger" title="Löschen" on:click=move |_| {
+                let children = s.child_count;
                 spawn_local(async move {
-                    if crate::dialog::confirm("Dokument löschen?", "Das Dokument wird samt aller Versionen endgültig gelöscht.")
+                    let mut d = crate::dialog::confirm("Dokument löschen?", "Das Dokument wird samt aller Versionen endgültig gelöscht.")
                         .ok("Löschen")
-                        .danger()
-                        .ask_ok()
-                        .await
-                    {
-                        match c.api.send_empty::<()>("DELETE", &format!("/api/documents/{id}"), None).await {
+                        .danger();
+                    if children > 0 {
+                        d = d.check(format!("Auch die {children} Unterdokument(e) löschen (sonst bleiben sie eigenständig)"), false);
+                    }
+                    if let Some(a) = d.ask().await {
+                        let url = format!("/api/documents/{id}{}", if a.checked { "?with_children=true" } else { "" });
+                        match c.api.send_empty::<()>("DELETE", &url, None).await {
                             Ok(()) => { c.selected.set(None); c.load_meta(); c.reload(); }
                             Err(e) => c.notify(e, true),
                         }
@@ -294,6 +297,8 @@ fn DetailBody(
             <div class="field-label">"Tags"</div>
             <TagEditor id=id detail=detail />
 
+            <crate::components::links::LinksSection id=id title=s.title.clone() />
+
             <div class="field-label">"Infos"</div>
             <table class="info">
                 <tr><td>"Datei"</td><td class="ellipsis">{s.original_filename.clone()}</td></tr>
@@ -342,7 +347,11 @@ fn CollectionPicker(id: i64, detail: RwSignal<Option<DocumentDetail>>) -> impl I
         } else {
             ids.retain(|x| *x != cid);
         }
-        save(c, id, DocumentUpdate { collection_ids: Some(ids), ..Default::default() }, detail);
+        let children = detail.with_untracked(|d| d.as_ref().map(|d| d.summary.child_count).unwrap_or(0));
+        spawn_local(async move {
+            let Some(with_children) = crate::components::links::ask_children(children).await else { return };
+            save(c, id, DocumentUpdate { collection_ids: Some(ids), with_children, ..Default::default() }, detail);
+        });
     };
 
     view! {

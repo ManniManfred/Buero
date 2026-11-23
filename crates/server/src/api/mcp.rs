@@ -495,6 +495,7 @@ async fn search(st: &AppState, lock: &Lock, args: &Value) -> Result<Value, Strin
         text: text.clone(),
         collections: collection.into_iter().collect(),
         direct: false,
+        hide_children: false,
         tags: int(args, "tag_id").into_iter().collect(),
         kind: string(args, "kind"),
         unfiled: args.get("unfiled").and_then(Value::as_bool).unwrap_or(false),

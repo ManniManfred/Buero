@@ -117,8 +117,14 @@ fn FilterBar() -> impl IntoView {
     }
 }
 
-fn bulk(c: Ctx, body: BulkUpdate, msg: &'static str) {
+fn bulk(c: Ctx, mut body: BulkUpdate, msg: &'static str) {
     spawn_local(async move {
+        // Sammlungen oder Löschen: Unterdokumente mitnehmen?
+        let n = crate::components::links::child_count(c, &body.ids);
+        if n > 0 && (body.delete || !body.add_collections.is_empty() || !body.remove_collections.is_empty()) {
+            let Some(w) = crate::components::links::ask_children(n).await else { return };
+            body.with_children = w;
+        }
         match c.api.send_empty("POST", "/api/documents/bulk", Some(&body)).await {
             Ok(()) => {
                 c.notify(msg, false);

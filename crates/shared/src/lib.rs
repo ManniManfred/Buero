@@ -76,6 +76,14 @@ pub struct DocumentSummary {
     pub has_thumbnail: bool,
     pub collection_ids: Vec<i64>,
     pub tag_ids: Vec<i64>,
+    /// Übergeordnetes Dokument (bei Unterdokumenten, z. B. Mail-Anhängen)
+    #[serde(default)]
+    pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub parent_title: Option<String>,
+    /// Anzahl direkter Unterdokumente
+    #[serde(default)]
+    pub child_count: i64,
     /// HTML-Snippet mit `<b>`-Hervorhebungen (nur bei Suche)
     pub snippet: Option<String>,
     pub score: Option<f32>,
@@ -119,6 +127,9 @@ pub struct SearchParams {
     /// Sammlungen nur direkt, ohne Dokumente aus Untersammlungen
     #[serde(default)]
     pub direct: bool,
+    /// Unterdokumente (z. B. Mail-Anhänge) nicht einzeln aufführen
+    #[serde(default)]
+    pub hide_children: bool,
     /// Kommagetrennte Tag-IDs (UND-verknüpft)
     #[serde(default)]
     pub tags: String,
@@ -180,6 +191,9 @@ pub struct DocumentUpdate {
     pub document_date: Option<String>,
     pub collection_ids: Option<Vec<i64>>,
     pub tag_ids: Option<Vec<i64>>,
+    /// Sammlungsänderungen auch auf alle Unterdokumente anwenden
+    #[serde(default)]
+    pub with_children: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -195,6 +209,9 @@ pub struct BulkUpdate {
     pub remove_tags: Vec<i64>,
     #[serde(default)]
     pub delete: bool,
+    /// Sammlungsänderungen bzw. Löschen auch für alle Unterdokumente
+    #[serde(default)]
+    pub with_children: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -599,6 +616,22 @@ pub struct MailMove {
     pub from: i64,
     /// 0 = nur aus `from` entfernen
     pub to: i64,
+}
+
+/// Verknüpfungen eines Dokuments
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DocumentLinks {
+    pub parent: Option<DocumentSummary>,
+    pub children: Vec<DocumentSummary>,
+    /// Verweise (gegenseitig)
+    pub related: Vec<DocumentSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkInput {
+    pub target: i64,
+    /// "child": Ziel wird Unterdokument; "parent": Ziel wird übergeordnet; "related": Verweis
+    pub kind: String,
 }
 
 /// Ordner auf dem Mailserver

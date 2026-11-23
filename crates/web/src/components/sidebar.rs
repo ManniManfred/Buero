@@ -24,7 +24,11 @@ fn drop_docs_on_collection(c: Ctx, ev: &web_sys::DragEvent, coll: i64) {
     ev.prevent_default();
     let n = ids.len();
     spawn_local(async move {
-        let body = BulkUpdate { ids, add_collections: vec![coll], ..Default::default() };
+        let with_children = match crate::components::links::ask_children(crate::components::links::child_count(c, &ids)).await {
+            Some(w) => w,
+            None => return,
+        };
+        let body = BulkUpdate { ids, add_collections: vec![coll], with_children, ..Default::default() };
         match c.api.send_empty("POST", "/api/documents/bulk", Some(&body)).await {
             Ok(()) => {
                 c.notify(format!("{n} Dokument(e) zu „{}“ hinzugefügt", c.collection_name(coll)), false);

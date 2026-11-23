@@ -36,7 +36,7 @@ pub fn Results() -> impl IntoView {
                             }
                         } />
                 </div>
-                <For each=move || c.results.get() key=|d| (d.id, d.updated_at, d.extract_status.clone(), d.snippet.clone(), d.collection_ids.clone(), d.tag_ids.clone()) let:doc>
+                <For each=move || c.results.get() key=|d| (d.id, d.updated_at, d.extract_status.clone(), d.snippet.clone(), d.collection_ids.clone(), d.tag_ids.clone(), d.parent_id, d.child_count) let:doc>
                     <ResultRow doc=doc />
                 </For>
                 <Show when=move || (c.results.with(|r| r.len()) as u64) < c.total.get()>
@@ -67,6 +67,9 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
     let collections = doc.collection_ids.clone();
     let tags = doc.tag_ids.clone();
     let snippet = doc.snippet.clone();
+    let drop_target = RwSignal::new(false);
+    let parent = doc.parent_id.map(|p| (p, doc.parent_title.clone().unwrap_or_default()));
+    let child_count = doc.child_count;
     let is_audio = doc.kind == "audio";
     let audio_url = c.api.file_url(&format!("/api/documents/{id}/file?v={}", doc.version));
     let audio_title = doc.title.clone();
@@ -87,6 +90,25 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
                     dt.set_effect_allowed("copy");
                 }
             }
+            on:dragover=move |ev| {
+                if ev.data_transfer().is_some_and(|dt| dt.types().includes(&DRAG_MIME.into(), 0)) {
+                    ev.prevent_default();
+                    drop_target.set(true);
+                }
+            }
+            on:dragleave=move |_| drop_target.set(false)
+            on:drop={
+                let title = doc.title.clone();
+                move |ev| {
+                    drop_target.set(false);
+                    let Some(dt) = ev.data_transfer() else { return };
+                    let Ok(data) = dt.get_data(DRAG_MIME) else { return };
+                    ev.prevent_default();
+                    let ids: Vec<i64> = data.split(',').filter_map(|s| s.parse().ok()).collect();
+                    crate::components::links::drop_on_document(c, ids, id, title.clone());
+                }
+            }
+            class:drop-target=move || drop_target.get()
             on:click=move |_| c.selected.set(Some(id))>
             <input type="checkbox" prop:checked=is_checked
                 on:click=move |ev| ev.stop_propagation()
@@ -114,6 +136,12 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
                     <span class="title">{doc.title.clone()}</span>
                     {(!status.is_empty()).then(|| view! { <span class="badge" class:bad=doc.extract_status == "failed">{status}</span> })}
                 </div>
+                {parent.map(|(pid, ptitle)| view! {
+                    <button class="link small parent-ref" title="Übergeordnetes Dokument öffnen"
+                        on:click=move |ev| { ev.stop_propagation(); c.selected.set(Some(pid)); }>
+                        <Icon name="layers" class="sm" />{format!("Unterdokument von „{ptitle}“")}
+                    </button>
+                })}
                 {snippet.map(|s| view! { <div class="snippet" inner_html=s></div> })}
                 <div class="meta">
                     <span>{date}</span>
@@ -140,6 +168,7 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
                         }
                     }).collect_view()}
                 </div>
+                {(child_count > 0).then(|| view! { <crate::components::links::ChildToggle id=id count=child_count /> })}
             </div>
         </div>
     }

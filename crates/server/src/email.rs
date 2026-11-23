@@ -233,6 +233,7 @@ pub async fn register(st: &AppState, doc_id: i64) -> anyhow::Result<()> {
     tx.commit().await?;
 
     // Anhänge: in dieselben Sammlungen wie die Mail
+    let mut attached_all: Vec<i64> = Vec::new();
     if !p.attachments.is_empty() {
         let collections: Vec<i64> =
             sqlx::query_scalar("SELECT collection_id FROM document_collections WHERE document_id = ?")
@@ -261,19 +262,35 @@ pub async fn register(st: &AppState, doc_id: i64) -> anyhow::Result<()> {
                 ..Default::default()
             };
             let results = crate::api::documents::store_uploads(st, form).await.map_err(|e| anyhow::anyhow!(e.message))?;
+            let mut attached = Vec::new();
             for r in results {
-                if r.document.id == doc_id {
+                let aid = r.document.id;
+                if aid == doc_id {
                     continue;
                 }
                 sqlx::query("INSERT OR IGNORE INTO email_attachments (email_id, document_id) VALUES (?, ?)")
                     .bind(doc_id)
-                    .bind(r.document.id)
+                    .bind(aid)
                     .execute(&st.pool)
                     .await?;
+                // Neue Anhänge werden Unterdokumente der Mail; schon vorhandene
+                // Dokumente (gleicher Inhalt) bekommen nur einen Verweis
+                let linked = if r.duplicate || r.document.parent_id.is_some() {
+                    crate::api::links::relate(st, doc_id, aid).await
+                } else {
+                    crate::api::links::set_parent(st, aid, doc_id).await
+                };
+                if let Err(e) = linked {
+                    tracing::warn!("Anhang {aid} nicht mit Mail {doc_id} verknüpft: {}", e.message);
+                }
+                attached.push(aid);
             }
+            attached_all = attached;
         }
     }
-    st.reindex(&[doc_id]).await?;
+    let mut touched = attached_all;
+    touched.push(doc_id);
+    st.reindex(&touched).await?;
     Ok(())
 }
 

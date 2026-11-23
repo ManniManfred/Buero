@@ -60,6 +60,12 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
   zu Konversationen, die schon in Büro liegen; ältere Antworten werden
   nachgesucht, wenn eine Konversation später dazukommt). Büro liest nur:
   nichts wird verschoben oder als gelesen markiert.
+- **Verknüpfungen**: Dokumente lassen sich als **Unterdokument** einem anderen
+  unterordnen (Mail-Anhänge automatisch) oder gegenseitig **verweisen** – in der
+  Detailansicht unter „Verknüpfungen“ oder per Drag & Drop eines Dokuments auf
+  ein anderes. Beim Stöbern erscheinen Unterdokumente aufklappbar unter ihrem
+  Dokument, bei Suche oder Filter nach Dateiart/Tag einzeln mit Hinweis.
+  Verschieben in Sammlungen und Löschen fragt, ob Unterdokumente mitgehen.
 - **Versionen**: bearbeitete Dateien als neue Version hochladen; alte Versionen
   bleiben abrufbar.
 - **Freigaben**: Links zu einem Dokument oder einer ganzen Sammlung (inkl.

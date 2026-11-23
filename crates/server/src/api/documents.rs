@@ -31,6 +31,7 @@ pub async fn list(
         text: p.q.chars().take(500).collect(),
         collections: parse_ids(&p.collections),
         direct: p.direct,
+        hide_children: p.hide_children,
         tags: parse_ids(&p.tags),
         kind: p.kind.clone(),
         unfiled: p.unfiled,
@@ -363,6 +364,16 @@ pub async fn update(
     Json(u): Json<DocumentUpdate>,
 ) -> AppResult<Json<DocumentSummary>> {
     db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    // Für Unterdokumente: Sammlungen vorher, um nur die Änderung zu übertragen
+    let old_collections: Vec<i64> = sqlx::query_scalar("SELECT collection_id FROM document_collections WHERE document_id = ?")
+        .bind(id)
+        .fetch_all(&st.pool)
+        .await?;
+    let children = if u.with_children && u.collection_ids.is_some() {
+        db::descendants_of(&st.pool, &[id]).await?
+    } else {
+        Vec::new()
+    };
     let mut tx = st.pool.begin().await?;
     if let Some(t) = u.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         sqlx::query("UPDATE documents SET title = ? WHERE id = ?").bind(t).bind(id).execute(&mut *tx).await?;
@@ -386,6 +397,16 @@ pub async fn update(
             sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT ?, id FROM collections WHERE id = ?")
                 .bind(id).bind(c).execute(&mut *tx).await?;
         }
+        for child in &children {
+            for c in cs.iter().filter(|c| !old_collections.contains(c)) {
+                sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT ?, id FROM collections WHERE id = ?")
+                    .bind(child).bind(c).execute(&mut *tx).await?;
+            }
+            for c in old_collections.iter().filter(|c| !cs.contains(c)) {
+                sqlx::query("DELETE FROM document_collections WHERE document_id = ? AND collection_id = ?")
+                    .bind(child).bind(c).execute(&mut *tx).await?;
+            }
+        }
     }
     if let Some(ts) = &u.tag_ids {
         sqlx::query("DELETE FROM document_tags WHERE document_id = ?").bind(id).execute(&mut *tx).await?;
@@ -396,11 +417,25 @@ pub async fn update(
     }
     sqlx::query("UPDATE documents SET updated_at = ? WHERE id = ?").bind(now()).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
-    st.reindex(&[id]).await?;
+    let mut touched = children;
+    touched.push(id);
+    st.reindex(&touched).await?;
     db::summary(&st.pool, id).await?.map(Json).ok_or_else(AppError::not_found)
 }
 
 async fn delete_docs(st: &AppState, ids: &[i64]) -> AppResult<()> {
+    // Unterdokumente, die bleiben, werden eigenständig (parent_id = NULL) – neu indexieren
+    let mut orphans: Vec<i64> = Vec::new();
+    for chunk in ids.chunks(500) {
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM documents WHERE parent_id IN (");
+        let mut sep = qb.separated(", ");
+        for id in chunk {
+            sep.push_bind(id);
+        }
+        qb.push(")");
+        orphans.extend(qb.build_query_scalar::<i64>().fetch_all(&st.pool).await?);
+    }
+    orphans.retain(|o| !ids.contains(o));
     for &id in ids {
         let shas: Vec<String> =
             sqlx::query_scalar("SELECT DISTINCT sha256 FROM document_versions WHERE document_id = ?")
@@ -418,21 +453,35 @@ async fn delete_docs(st: &AppState, ids: &[i64]) -> AppResult<()> {
     }
     let st2 = st.clone();
     tokio::task::spawn_blocking(move || st2.search.commit()).await??;
+    st.reindex(&orphans).await?;
     Ok(())
 }
 
-pub async fn delete(State(st): State<AppState>, Path(id): Path<i64>) -> AppResult<StatusCode> {
-    delete_docs(&st, &[id]).await?;
+#[derive(Deserialize)]
+pub struct DeleteParams {
+    #[serde(default)]
+    with_children: bool,
+}
+
+pub async fn delete(State(st): State<AppState>, Path(id): Path<i64>, Query(p): Query<DeleteParams>) -> AppResult<StatusCode> {
+    let mut ids = vec![id];
+    if p.with_children {
+        ids.extend(db::descendants_of(&st.pool, &[id]).await?);
+    }
+    delete_docs(&st, &ids).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn bulk(State(st): State<AppState>, Json(b): Json<BulkUpdate>) -> AppResult<StatusCode> {
+pub async fn bulk(State(st): State<AppState>, Json(mut b): Json<BulkUpdate>) -> AppResult<StatusCode> {
+    let children = if b.with_children { db::descendants_of(&st.pool, &b.ids).await? } else { Vec::new() };
     if b.delete {
+        b.ids.extend(children);
         delete_docs(&st, &b.ids).await?;
         return Ok(StatusCode::NO_CONTENT);
     }
     let mut tx = st.pool.begin().await?;
-    for &id in &b.ids {
+    // Sammlungen auch für Unterdokumente, Tags nur für die gewählten Dokumente
+    for &id in b.ids.iter().chain(children.iter()) {
         for c in &b.add_collections {
             sqlx::query("INSERT OR IGNORE INTO document_collections (document_id, collection_id) SELECT d.id, c.id FROM documents d, collections c WHERE d.id = ? AND c.id = ?")
                 .bind(id).bind(c).execute(&mut *tx).await?;
@@ -440,6 +489,9 @@ pub async fn bulk(State(st): State<AppState>, Json(b): Json<BulkUpdate>) -> AppR
         for c in &b.remove_collections {
             sqlx::query("DELETE FROM document_collections WHERE document_id = ? AND collection_id = ?")
                 .bind(id).bind(c).execute(&mut *tx).await?;
+        }
+        if !b.ids.contains(&id) {
+            continue;
         }
         for t in &b.add_tags {
             sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) SELECT d.id, t.id FROM documents d, tags t WHERE d.id = ? AND t.id = ?")
@@ -451,6 +503,7 @@ pub async fn bulk(State(st): State<AppState>, Json(b): Json<BulkUpdate>) -> AppR
         }
     }
     tx.commit().await?;
+    b.ids.extend(children);
     st.reindex(&b.ids).await?;
     Ok(StatusCode::NO_CONTENT)
 }

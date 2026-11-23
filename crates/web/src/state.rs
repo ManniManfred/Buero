@@ -176,6 +176,11 @@ impl Ctx {
         if !k.is_empty() {
             parts.push(format!("kind={k}"));
         }
+        // Beim Stöbern erscheinen Unterdokumente unter ihrem Dokument; bei
+        // Suche oder Filter nach Dateiart/Tag einzeln
+        if q.trim().is_empty() && k.is_empty() && tags.is_empty() {
+            parts.push("hide_children=true".into());
+        }
         if self.unfiled.get_untracked() {
             parts.push("unfiled=true".into());
         }

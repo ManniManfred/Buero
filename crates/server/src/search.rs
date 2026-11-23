@@ -25,7 +25,7 @@ use tantivy::tokenizer::{
 };
 use tantivy::{DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term};
 
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 const TOKENIZER: &str = "de_stem";
 
 #[derive(Clone, Copy)]
@@ -39,6 +39,7 @@ struct Fields {
     collections_text: Field,
     collection: Field,
     direct_collection: Field,
+    child: Field,
     tag: Field,
     kind: Field,
     unfiled: Field,
@@ -66,6 +67,8 @@ pub struct IndexDoc {
     pub collection_ids: Vec<i64>,
     /// Nur die Sammlungen, in denen das Dokument selbst liegt
     pub direct_collection_ids: Vec<i64>,
+    /// Unterdokument (z. B. Mail-Anhang)
+    pub is_child: bool,
     pub tag_ids: Vec<i64>,
     pub kind: String,
     pub created: i64,
@@ -77,6 +80,8 @@ pub struct Query_ {
     pub collections: Vec<i64>,
     /// `collections` nur direkt, ohne Dokumente aus Untersammlungen
     pub direct: bool,
+    /// Unterdokumente ausblenden (sie erscheinen unter ihrem Dokument)
+    pub hide_children: bool,
     pub tags: Vec<i64>,
     pub kind: String,
     pub unfiled: bool,
@@ -114,6 +119,7 @@ fn schema() -> (Schema, Fields) {
         collections_text: b.add_text_field("collections", text(false)),
         collection: b.add_u64_field("collection_id", INDEXED),
         direct_collection: b.add_u64_field("direct_collection_id", INDEXED),
+        child: b.add_u64_field("child", INDEXED),
         tag: b.add_u64_field("tag_id", INDEXED),
         kind: b.add_text_field("kind", STRING),
         unfiled: b.add_u64_field("unfiled", INDEXED),
@@ -186,6 +192,7 @@ impl SearchIndex {
         for t in &d.tag_ids {
             doc.add_u64(f.tag, *t as u64);
         }
+        doc.add_u64(f.child, d.is_child as u64);
         doc.add_text(f.kind, &d.kind);
         doc.add_u64(f.unfiled, d.collection_ids.is_empty() as u64);
         doc.add_i64(f.created, d.created);
@@ -352,6 +359,12 @@ impl SearchIndex {
         for t in &q.tags {
             clauses.push((Occur::Must, Box::new(TermQuery::new(
                 Term::from_field_u64(f.tag, *t as u64),
+                IndexRecordOption::Basic,
+            ))));
+        }
+        if q.hide_children {
+            clauses.push((Occur::MustNot, Box::new(TermQuery::new(
+                Term::from_field_u64(f.child, 1),
                 IndexRecordOption::Basic,
             ))));
         }
