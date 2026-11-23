@@ -445,6 +445,102 @@ fn drive_open(app: tauri::AppHandle, st: State<'_, DriveState>, collection_id: O
 }
 
 // ---------------------------------------------------------------------------
+// Aktivität der Sync-Ordner
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct FolderActivity {
+    /// `None`: Sync-Ordner für alle Sammlungen
+    collection_id: Option<i64>,
+    name: String,
+    path: String,
+    connected: bool,
+    /// Zustand und letzte Aktivitäten (nur wenn verbunden)
+    state: Option<buero_vfs::SyncState>,
+}
+
+/// Alle eingerichteten Sync-Ordner mit Zustand und letzten Aktivitäten
+#[tauri::command]
+fn sync_activity(app: tauri::AppHandle, st: State<'_, DriveState>) -> Vec<FolderActivity> {
+    let s = load_settings(&app);
+    let mut out = Vec::new();
+    if let Some(m) = st.mounted.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(state) = m.drive.activity() {
+            out.push(FolderActivity {
+                collection_id: None,
+                name: "Alle Sammlungen".into(),
+                path: m.drive.mount_point().display().to_string(),
+                connected: true,
+                state: Some(state),
+            });
+        }
+    }
+    let folders = st.folders.lock().unwrap_or_else(|e| e.into_inner());
+    for f in &s.folders {
+        let m = folders.get(&f.collection_id);
+        out.push(FolderActivity {
+            collection_id: Some(f.collection_id),
+            name: f.name.clone(),
+            path: f.path.clone(),
+            connected: m.is_some(),
+            state: m.and_then(|m| m.drive.activity()),
+        });
+    }
+    out
+}
+
+/// Sofort abgleichen (`collection_id`: nur diesen Ordner, sonst alle)
+#[tauri::command]
+fn sync_now(st: State<'_, DriveState>, collection_id: Option<i64>) {
+    if collection_id.is_none() {
+        if let Some(m) = st.mounted.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            m.drive.sync_now();
+        }
+    }
+    for (c, m) in st.folders.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        if collection_id.is_none_or(|x| x == *c) {
+            m.drive.sync_now();
+        }
+    }
+}
+
+/// Protokolldatei im Standardprogramm öffnen
+#[tauri::command]
+fn sync_log_open(app: tauri::AppHandle) -> Result<(), String> {
+    let file = buero_vfs::log_file(&cache_dir(&app)?);
+    if !file.exists() {
+        return Err("Noch keine Einträge im Protokoll".into());
+    }
+    app.opener().open_path(file.display().to_string(), None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Aktivitätsfenster zeigen (bzw. anlegen)
+fn show_activity(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window(ACTIVITY_WINDOW) {
+        w.show()?;
+        w.unminimize()?;
+        return w.set_focus();
+    }
+    // Dieselbe Oberfläche wie das Hauptfenster, aber nur die Aktivitätsansicht
+    tauri::WebviewWindowBuilder::new(app, ACTIVITY_WINDOW, tauri::WebviewUrl::App("index.html".into()))
+        .title("Büro – Synchronisierung")
+        .inner_size(560.0, 680.0)
+        .min_inner_size(380.0, 360.0)
+        .initialization_script("window.__BUERO_VIEW__ = 'activity';")
+        .build()?;
+    Ok(())
+}
+
+const ACTIVITY_WINDOW: &str = "activity";
+
+/// Aktivitätsfenster öffnen (async: unter Windows dürfen Fenster nicht aus
+/// einem synchronen Befehl heraus entstehen)
+#[tauri::command]
+async fn activity_open(app: tauri::AppHandle) -> Result<(), String> {
+    show_activity(&app).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Updates
 // ---------------------------------------------------------------------------
 
@@ -575,14 +671,18 @@ fn start_hidden(app: &tauri::AppHandle) -> bool {
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Büro öffnen", true, None::<&str>)?;
+    let activity = MenuItem::with_id(app, "activity", "Synchronisierung …", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &activity, &PredefinedMenuItem::separator(app)?, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Büro")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_main(app),
+            "activity" => {
+                let _ = show_activity(app);
+            }
             // Beim Beenden trennt RunEvent::Exit Laufwerk und Sync-Ordner
             "quit" => app.exit(0),
             _ => {}
@@ -620,7 +720,11 @@ fn main() {
             update_install,
             show_window,
             autostart_get,
-            autostart_set
+            autostart_set,
+            sync_activity,
+            sync_now,
+            sync_log_open,
+            activity_open
         ])
         .setup(|app| {
             setup_tray(app.handle())?;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Manfred Roßkamp
 
+pub mod activity;
 pub mod dashboard;
 pub mod desktop;
 pub mod detail;

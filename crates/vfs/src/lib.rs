@@ -12,6 +12,8 @@
 //! Sync-Ordner können außerdem genau einer Sammlung zugeordnet sein (mehrere
 //! Ordner gleichzeitig möglich).
 
+#[cfg_attr(not(windows), allow(dead_code))]
+mod activity;
 pub mod client;
 // Unter Windows nutzt nur der Sync-Ordner Teile davon (das Laufwerk gibt es dort nicht)
 #[cfg_attr(windows, allow(dead_code))]
@@ -24,12 +26,12 @@ mod cloud;
 mod fuse;
 
 use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
-#[cfg(windows)]
-use std::sync::Mutex;
 
+pub use crate::activity::{ActivityEntry, SyncState};
 pub use crate::core::INBOX_NAME;
+pub use crate::sync::ActKind;
 #[cfg(target_os = "linux")]
 use crate::core::Vfs;
 
@@ -95,7 +97,7 @@ enum Inner {
     Unsupported,
     #[cfg(windows)]
     #[allow(dead_code)]
-    Sync { mount: cloud::Mount, errors: Arc<Mutex<Option<String>>> },
+    Sync { mount: cloud::Mount, log: activity::SharedLog },
 }
 
 /// Eingebundene Sammlungen. Beim Verwerfen wird ausgehängt bzw. getrennt.
@@ -126,11 +128,38 @@ impl Drive {
             #[cfg(target_os = "linux")]
             Inner::Vfs { vfs, .. } => vfs.last_error(),
             #[cfg(windows)]
-            Inner::Sync { errors, .. } => errors.lock().ok()?.clone(),
+            Inner::Sync { log, .. } => {
+                let l = log.lock().ok()?;
+                (!l.errors().is_empty()).then(|| l.errors().join("\n"))
+            }
             #[cfg(not(any(target_os = "linux", windows)))]
             Inner::Unsupported => None,
         }
     }
+
+    /// Zustand und letzte Aktivitäten (nur Sync-Ordner)
+    pub fn activity(&self) -> Option<SyncState> {
+        match &self.inner {
+            #[cfg(windows)]
+            Inner::Sync { log, .. } => log.lock().ok().map(|l| l.state()),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
+    /// Sofort abgleichen (nur Sync-Ordner)
+    pub fn sync_now(&self) {
+        #[cfg(windows)]
+        {
+            let Inner::Sync { mount, .. } = &self.inner;
+            mount.sync_now();
+        }
+    }
+}
+
+/// Protokolldatei der Sync-Ordner (Aktivitäten und Fehler)
+pub fn log_file(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("sync.log")
 }
 
 /// Wird das Einbinden auf diesem System unterstützt?
@@ -193,18 +222,19 @@ pub fn mount(o: Options) -> Result<Drive, String> {
     if o.mode == Mode::SyncFolder {
         #[cfg(windows)]
         {
-            let errors = Arc::new(Mutex::new(None));
             let coll = o.collection.as_ref().map(|(c, _)| *c);
             let cache = o.cache_dir.join(match coll {
                 Some(c) => format!("sync-{c}"),
                 None => "sync".into(),
             });
-            let mount = cloud::mount(client, &o.server, &o.mount_point, &cache, o.collection, errors.clone())?;
+            let name = o.collection.as_ref().map(|(_, n)| n.clone()).unwrap_or_else(|| "Alle Sammlungen".into());
+            let log = activity::ActivityLog::new(name, Some(log_file(&o.cache_dir)));
+            let mount = cloud::mount(client, &o.server, &o.mount_point, &cache, o.collection, log.clone())?;
             return Ok(Drive {
                 mode: o.mode,
                 collection: coll,
                 mount_point: o.mount_point,
-                inner: Inner::Sync { mount, errors },
+                inner: Inner::Sync { mount, log },
             });
         }
         #[cfg(not(windows))]

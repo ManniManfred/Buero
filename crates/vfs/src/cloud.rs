@@ -42,8 +42,9 @@ use cloud_filter::root::{
 use cloud_filter::utility::{FileTime, WriteAt};
 
 use crate::client::Client;
+use crate::activity::SharedLog;
 use crate::core::INBOX_NAME;
-use crate::sync::{Engine, LocalEntry, LocalFs, Meta};
+use crate::sync::{ActKind, Engine, LocalEntry, LocalFs, Meta};
 
 const PROVIDER: &str = "Buero";
 const ACCOUNT: &str = "Buero";
@@ -158,6 +159,13 @@ pub struct Mount {
     thread: Option<JoinHandle<()>>,
 }
 
+impl Mount {
+    /// Gleich abgleichen statt auf den nächsten Durchlauf zu warten
+    pub fn sync_now(&self) {
+        let _ = self.wake.send(());
+    }
+}
+
 impl Drop for Mount {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -177,7 +185,7 @@ pub fn mount(
     root: &Path,
     cache: &Path,
     collection: Option<(i64, String)>,
-    errors: Arc<Mutex<Option<String>>>,
+    log: SharedLog,
 ) -> Result<Mount, String> {
     check_available()?;
     fs::create_dir_all(root).map_err(|e| format!("Ordner „{}“ anlegen: {e}", root.display()))?;
@@ -206,6 +214,7 @@ pub fn mount(
         docs,
         wake: tx.clone(),
         download: Mutex::new(()),
+        log: log.clone(),
     };
     let connection = Session::new().connect(&root, filter).map_err(|e| format!("Sync-Ordner verbinden: {e}"))?;
     let local = WinLocal { root, uploads, counter: AtomicU64::new(0) };
@@ -217,14 +226,14 @@ pub fn mount(
     let stop2 = stop.clone();
     let thread = std::thread::Builder::new()
         .name("buero-sync".into())
-        .spawn(move || run(engine, rx, stop2, errors))
+        .spawn(move || run(engine, rx, stop2, log))
         .map_err(text)?;
     let _ = tx.send(());
     Ok(Mount { connection: Some(connection), stop, wake: tx, thread: Some(thread) })
 }
 
 /// Abgleich im Hintergrund: nach Änderungen (mit kurzer Ruhepause) und regelmäßig
-fn run(mut engine: Engine<Client, WinLocal>, rx: Receiver<()>, stop: Arc<AtomicBool>, errors: Arc<Mutex<Option<String>>>) {
+fn run(mut engine: Engine<Client, WinLocal>, rx: Receiver<()>, stop: Arc<AtomicBool>, activity: SharedLog) {
     let mut next = Duration::ZERO;
     loop {
         match rx.recv_timeout(next) {
@@ -244,22 +253,12 @@ fn run(mut engine: Engine<Client, WinLocal>, rx: Receiver<()>, stop: Arc<AtomicB
         if stop.load(Ordering::SeqCst) {
             return;
         }
+        if let Ok(mut a) = activity.lock() {
+            a.started();
+        }
         let res = engine.reconcile();
-        let msg = match &res {
-            Ok(p) if p.errors.is_empty() => None,
-            Ok(p) => {
-                for e in &p.errors {
-                    log::warn!("Büro-Sync: {e}");
-                }
-                Some(p.errors.join("\n"))
-            }
-            Err(e) => {
-                log::warn!("Büro-Sync: {e}");
-                Some(e.clone())
-            }
-        };
-        if let Ok(mut e) = errors.lock() {
-            *e = msg;
+        if let Ok(mut a) = activity.lock() {
+            a.finished(&res);
         }
         next = match res {
             Ok(p) if p.pending => Duration::from_secs(3),
@@ -460,11 +459,23 @@ pub struct Filter {
     docs: PathBuf,
     wake: Sender<()>,
     download: Mutex<()>,
+    log: SharedLog,
 }
 
 impl Filter {
     fn wake(&self) {
         let _ = self.wake.send(());
+    }
+
+    /// Pfad relativ zum Sync-Ordner (für das Protokoll)
+    fn rel(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root).unwrap_or(path).display().to_string()
+    }
+
+    fn note(&self, kind: ActKind, path: &Path, text: impl Into<String>) {
+        if let Ok(mut l) = self.log.lock() {
+            l.add(kind, self.rel(path), text);
+        }
     }
 
     fn is_inbox(&self, path: &Path) -> bool {
@@ -505,6 +516,7 @@ impl SyncFilter for Filter {
         };
         let path = self.cached(id, version).map_err(|e| {
             log::warn!("Büro-Sync: Laden fehlgeschlagen: {e}");
+            self.note(ActKind::Error, &request.path(), format!("Laden fehlgeschlagen: {e}"));
             CloudErrorKind::NetworkUnavailable
         })?;
         let mut file = File::open(&path).map_err(|_| CloudErrorKind::Unsuccessful)?;
@@ -529,6 +541,10 @@ impl SyncFilter for Filter {
             })?;
             pos += n as u64;
             let _ = ticket.report_progress(end - range.start, pos - range.start);
+        }
+        // Große Dateien fordert Windows in mehreren Stücken an: nur einmal vermerken
+        if range.start == 0 {
+            self.note(ActKind::Download, &request.path(), "Geladen");
         }
         Ok(())
     }

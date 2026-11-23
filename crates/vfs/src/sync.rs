@@ -193,6 +193,38 @@ pub struct Pass {
     pub pending: bool,
     /// Probleme dieses Durchlaufs (für die Statusanzeige)
     pub errors: Vec<String>,
+    /// Was dieser Durchlauf getan hat (für das Aktivitätsfenster)
+    pub activity: Vec<Act>,
+}
+
+/// Art einer Aktivität
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActKind {
+    /// Zum Server übertragen
+    Upload,
+    /// Vom Server übernommen (neu, neue Fassung, geladen)
+    Download,
+    /// Umbenannt oder verschoben
+    Change,
+    /// Gelöscht bzw. entfernt
+    Remove,
+    Error,
+}
+
+/// Eine Aktivität eines Durchlaufs
+#[derive(Debug, Clone, PartialEq)]
+pub struct Act {
+    pub kind: ActKind,
+    /// Pfad im Sync-Ordner (bzw. Name am Server), kann leer sein
+    pub path: String,
+    pub text: String,
+}
+
+impl Pass {
+    fn act(&mut self, kind: ActKind, path: impl Into<String>, text: impl Into<String>) {
+        self.activity.push(Act { kind, path: path.into(), text: text.into() });
+    }
 }
 
 /// Fehlt ein Eintrag so viele Durchläufe hintereinander, gilt er als gelöscht
@@ -379,6 +411,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                         match self.remote.update_collection(*id, &input) {
                             Ok(_) => {
                                 pass.remote_changed = true;
+                                pass.act(ActKind::Change, show(&e.path), "Sammlung umbenannt bzw. verschoben");
                                 self.mark(&e.path, &Meta::Coll { id: *id, name: name.clone(), parent }, None, pass);
                             }
                             Err(err) => pass.errors.push(format!("Ordner „{}“: {err}", show(&e.path))),
@@ -401,6 +434,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                         Ok(c) => {
                             dirs.insert(lower(&e.path), Dir::Coll(c.id));
                             pass.remote_changed = true;
+                            pass.act(ActKind::Upload, show(&e.path), "Als Sammlung angelegt");
                             self.mark(&e.path, &Meta::Coll { id: c.id, name: name.clone(), parent }, None, pass);
                         }
                         Err(err) => pass.errors.push(format!("Ordner „{}“ anlegen: {err}", show(&e.path))),
@@ -518,6 +552,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
             match res {
                 Ok(d) => {
                     pass.remote_changed = true;
+                    pass.act(ActKind::Upload, show(&e.path), "Neue Version hochgeladen");
                     if let Meta::Doc { version, .. } = &mut meta {
                         *version = d.version;
                     }
@@ -530,6 +565,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                     match res {
                         Ok(d) => {
                             pass.remote_changed = true;
+                            pass.act(ActKind::Upload, show(&e.path), format!("Als Konflikt-Kopie „{}“ hochgeladen", d.title));
                             pass.errors.push(format!(
                                 "„{}“ wurde inzwischen anderswo geändert – deine Fassung liegt daneben als „{}“",
                                 doc.title, d.title
@@ -567,6 +603,12 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
             match self.remote.update_document(id, &u) {
                 Ok(_) => {
                     pass.remote_changed = true;
+                    let what = match (renamed, moved) {
+                        (true, true) => "Umbenannt und verschoben",
+                        (true, false) => "Umbenannt",
+                        _ => "Verschoben",
+                    };
+                    pass.act(ActKind::Change, show(&e.path), what);
                     if let Meta::Doc { dir, name: n, .. } = &mut meta {
                         *dir = dir_key(pdir);
                         *n = name.clone();
@@ -593,6 +635,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
         match res {
             Ok(d) => {
                 pass.remote_changed = true;
+                pass.act(ActKind::Upload, show(&e.path), "Neue Version hochgeladen");
                 let m = Meta::Doc { id, dir: dir_key(pdir), version: d.version, name: e.name().to_string() };
                 self.mark(&e.path, &m, Some(stamp), pass);
             }
@@ -632,6 +675,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
         match res {
             Ok(d) => {
                 pass.remote_changed = true;
+                pass.act(ActKind::Upload, show(&path), "Hochgeladen");
                 let m = Meta::Doc { id: d.id, dir: dir_key(dir), version: d.version, name };
                 self.mark(&path, &m, Some(stamp), pass);
             }
@@ -716,6 +760,15 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
             match res {
                 Ok(()) | Err(ApiError { status: Some(404), .. }) => {
                     pass.remote_changed = true;
+                    let (name, text) = match &i {
+                        Ident::Doc(d, k) => (
+                            snap.docs.get(d).map(|x| x.title.clone()).unwrap_or_default(),
+                            if matches!(dir_of_key(*k), Dir::Coll(_)) { "Aus der Sammlung entfernt" } else { "Am Server gelöscht" },
+                        ),
+                        Ident::Coll(c) => (snap.colls.get(c).map(|x| x.name.clone()).unwrap_or_default(), "Sammlung gelöscht"),
+                        Ident::Inbox => (String::new(), ""),
+                    };
+                    pass.act(ActKind::Remove, name, text);
                     self.missing.remove(&i);
                 }
                 Err(err) => pass.errors.push(format!("Löschen am Server: {err}")),
@@ -784,6 +837,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                     }
                     match self.local.rename(&e.path, path) {
                         Ok(()) => {
+                            pass.act(ActKind::Change, show(path), format!("Am Server umbenannt bzw. verschoben (vorher „{}“)", show(&e.path)));
                             self.mark(path, &meta, None, pass);
                             return PullStep::Rescan;
                         }
@@ -803,7 +857,10 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                         Some(o) if o.is_dir && o.meta.is_none() => self.mark(path, &meta, None, pass),
                         Some(_) => pass.errors.push(format!("„{}“ ist lokal schon belegt", show(path))),
                         None => match self.local.create_dir(path, &meta) {
-                            Ok(()) => changed = true,
+                            Ok(()) => {
+                                changed = true;
+                                pass.act(ActKind::Download, show(path), "Ordner angelegt");
+                            }
                             Err(err) => pass.errors.push(format!("Ordner „{}“ anlegen: {err}", show(path))),
                         },
                     }
@@ -852,6 +909,11 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                             match self.local.rename(&l.path, &path) {
                                 Ok(()) => {
                                     changed = true;
+                                    pass.act(
+                                        ActKind::Change,
+                                        show(&path),
+                                        format!("Am Server umbenannt bzw. verschoben (vorher „{}“)", show(&l.path)),
+                                    );
                                     cur = path.clone();
                                 }
                                 Err(err) => {
@@ -869,7 +931,10 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                             pass.pending = true;
                         } else if local_version != doc.version {
                             match self.local.replace_file(&cur, &meta, size, doc.updated_at) {
-                                Ok(()) => changed = true,
+                                Ok(()) => {
+                                    changed = true;
+                                    pass.act(ActKind::Download, show(&cur), "Neue Version vom Server");
+                                }
                                 Err(err) => pass.errors.push(format!("„{}“ aktualisieren: {err}", show(&cur))),
                             }
                         } else if l.meta.as_ref() != Some(&meta) {
@@ -884,7 +949,10 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                             continue; // belegt (neue lokale Datei gleichen Namens)
                         }
                         match self.local.create_file(&path, &meta, size, doc.updated_at) {
-                            Ok(()) => changed = true,
+                            Ok(()) => {
+                                changed = true;
+                                pass.act(ActKind::Download, show(&path), "Neu vom Server");
+                            }
                             Err(err) => pass.errors.push(format!("„{}“ anlegen: {err}", show(&path))),
                         }
                     }
@@ -904,6 +972,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
             }
             if self.local.remove(&e.path, e.is_dir).is_ok() {
                 changed = true;
+                pass.act(ActKind::Remove, show(&e.path), "Am Server entfernt");
             }
         }
         PullStep::Done(changed)

@@ -181,6 +181,15 @@ pub fn DriveSection() -> impl IntoView {
                 <div class="small error-text">{e.lines().map(|l| view! { <p>{l.to_string()}</p> }).collect_view()}</div>
             })}
             {s.folders_unavailable.is_none().then(|| view! { <FolderSection status=status /> })}
+            <Show when=move || status.with(|st| st.as_ref().is_some_and(|st| (st.mounted && st.mode == "sync") || !st.folders.is_empty()))>
+                <button on:click=move |_| spawn_local(async move {
+                    if let Err(e) = invoke::<()>("activity_open", json!({})).await {
+                        c.notify(e, true);
+                    }
+                })>
+                    <Icon name="history" />"Aktivität und Fehlerprotokoll"
+                </button>
+            </Show>
             <hr />
         }})}
     }

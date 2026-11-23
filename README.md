@@ -380,6 +380,15 @@ am Computer starten“ in den Einstellungen startet Büro automatisch und
 unsichtbar im Infobereich; das Fenster erscheint nur, wenn eine Anmeldung
 nötig ist oder nichts abzugleichen ist.
 
+Was gerade passiert, zeigt das Fenster „Synchronisierung“ (im Menü des
+Infobereichs oder in den Einstellungen unter „Aktivität und
+Fehlerprotokoll“): je Sync-Ordner der Zustand, aktuelle Probleme und die
+letzten Aktivitäten (hochgeladen, vom Server übernommen, umbenannt,
+entfernt, Fehler); „Jetzt abgleichen“ startet sofort einen Durchlauf. Alles
+wird außerdem in eine Protokolldatei geschrieben (`sync.log` im
+Zwischenspeicher, Knopf „Protokoll“); Fehler, die bei jedem Durchlauf
+wiederkehren, stehen dort nur einmal.
+
 Für beide Arten gilt:
 
 - Jede Sammlung ist ein Ordner, Untersammlungen sind Unterordner. Dokumente ohne
@@ -513,9 +522,10 @@ dazu unter *Einstellungen* auf den Quellcode.
 Die Lizenzen aller verwendeten Bibliotheken stehen in
 [`crates/web/licenses.html`](crates/web/licenses.html) und sind in der
 Anwendung unter *Einstellungen → Lizenzen von Drittanbietern* abrufbar
-(Webseite, Desktop-Client und Docker-Image). Die Datei wird beim Docker- und
-Desktop-Build automatisch neu erzeugt; nach Änderungen an Abhängigkeiten lokal
-aktualisieren mit:
+(Webseite, Desktop-Client und Docker-Image). Die Datei ist eingecheckt und wird
+nicht beim Build erzeugt (das kostete jeden Release-Build 1–2 Minuten). Nach
+Änderungen an Abhängigkeiten (`Cargo.lock`) bitte von Hand neu erzeugen und
+mit einchecken:
 
 ```bash
 cargo install cargo-about --locked --features cli

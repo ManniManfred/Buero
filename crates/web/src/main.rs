@@ -28,6 +28,11 @@ fn main() {
         leptos::mount::mount_to_body(move || view! { <components::public::PublicPage token=token.clone() /> });
         return;
     }
+    // Desktop-Client: eigenes Fenster mit der Aktivität der Sync-Ordner
+    if components::activity::is_activity_window() {
+        leptos::mount::mount_to_body(components::activity::ActivityWindow);
+        return;
+    }
     leptos::mount::mount_to_body(App);
 }
 
