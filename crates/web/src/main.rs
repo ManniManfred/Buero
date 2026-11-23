@@ -86,6 +86,16 @@ fn App() -> impl IntoView {
         }
     });
 
+    // Desktop: Nach einem Autostart ist das Fenster versteckt. Braucht es eine
+    // Eingabe (Server, Anmeldung), muss es sichtbar werden.
+    Effect::new(move |_| {
+        if api::is_desktop() && matches!(phase.get(), Phase::NeedServer | Phase::Login) {
+            spawn_local(async move {
+                let _ = api::invoke::<()>("show_window", serde_json::json!({})).await;
+            });
+        }
+    });
+
     if api::is_desktop() {
         // Fenster ohne Systemrahmen: eigene Titelleiste (Abstände über CSS)
         let _ = document().document_element().map(|e| e.class_list().add_1("desktop"));

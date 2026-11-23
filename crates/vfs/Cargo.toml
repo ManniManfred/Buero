@@ -6,7 +6,7 @@ publish = false
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Büro – Sammlungen im Dateimanager (Sync-Ordner / FUSE / WinFsp)"
+description = "Büro – Sammlungen im Dateimanager (Windows: Sync-Ordner, Linux: FUSE)"
 
 [dependencies]
 shared.workspace = true
@@ -28,11 +28,5 @@ fuser = { version = "0.19", default-features = false }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winfsp = { version = "0.13", default-features = false, features = ["delayload"] }
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Authorization"] }
 # Sync-Ordner wie OneDrive/Nextcloud (Cloud Files API)
 cloud-filter = "0.0.7"
-
-[features]
-# Nur zum Prüfen des Windows-Codes unter Linux (cargo check --target x86_64-pc-windows-msvc)
-check-windows = ["winfsp/docsrs"]

@@ -49,7 +49,7 @@ pub struct DriveStatus {
 fn mode_label(id: &str) -> &'static str {
     match id {
         "sync" => "Sync-Ordner wie OneDrive (empfohlen)",
-        _ => "Laufwerk mit eigenem Buchstaben (benötigt WinFsp)",
+        _ => "Laufwerk (FUSE)",
     }
 }
 
@@ -151,17 +151,7 @@ pub fn DriveSection() -> impl IntoView {
                     </label>
                 }
             })}
-            {move || unavailable().map(|u| {
-                let winfsp = u.contains("WinFsp");
-                view! {
-                    <p class="small error-text">{u}</p>
-                    <Show when=move || winfsp>
-                        <button on:click=|_| crate::api::open_external("https://winfsp.dev/rel/")>
-                            <Icon name="external" />"WinFsp herunterladen"
-                        </button>
-                    </Show>
-                }
-            })}
+            {move || unavailable().map(|u| view! { <p class="small error-text">{u}</p> })}
             {if s.mounted {
                 view! {
                     <p class="small">{move || if is_sync() { "Verbunden mit " } else { "Eingebunden unter " }}<code>{s.mount_point.clone()}</code></p>
@@ -175,7 +165,7 @@ pub fn DriveSection() -> impl IntoView {
                 }.into_any()
             } else {
                 view! {
-                    <label>{move || if is_sync() { "Ordner (neu oder leer)" } else { "Einhängepunkt (Ordner bzw. Laufwerksbuchstabe)" }}
+                    <label>{move || if is_sync() { "Ordner (neu oder leer)" } else { "Einhängepunkt (Ordner)" }}
                         <input prop:value=move || mount_point.get() on:input=move |ev| mount_point.set(event_target_value(&ev)) />
                     </label>
                     <button on:click=mount disabled=move || busy.get() || unavailable().is_some()>
@@ -193,6 +183,41 @@ pub fn DriveSection() -> impl IntoView {
             {s.folders_unavailable.is_none().then(|| view! { <FolderSection status=status /> })}
             <hr />
         }})}
+    }
+}
+
+/// Mit der Anmeldung am Computer starten (nur im Infobereich, wenn etwas
+/// abzugleichen ist)
+#[component]
+pub fn AutostartSection() -> impl IntoView {
+    let c = ctx();
+    // `None`: unbekannt (z. B. vom System nicht unterstützt) – dann nichts zeigen
+    let on = RwSignal::new(None::<bool>);
+    spawn_local(async move { on.set(invoke::<bool>("autostart_get", json!({})).await.ok()) });
+    let toggle = move |ev: leptos::ev::Event| {
+        let want = event_target_checked(&ev);
+        spawn_local(async move {
+            match invoke::<bool>("autostart_set", json!({ "enabled": want })).await {
+                Ok(v) => on.set(Some(v)),
+                Err(e) => {
+                    // Schalter auf den tatsächlichen Stand zurücksetzen
+                    on.set(on.get_untracked());
+                    c.notify(e, true);
+                }
+            }
+        });
+    };
+    view! {
+        <Show when=move || on.get().is_some()>
+            <label class="dialog-check">
+                <input type="checkbox" prop:checked=move || on.get().unwrap_or(false) on:change=toggle />
+                "Beim Anmelden am Computer starten"
+            </label>
+            <p class="muted small">
+                "Büro startet dann unsichtbar im Infobereich und gleicht Sync-Ordner im Hintergrund ab. "
+                "Abgeglichen wird nur, solange Büro läuft."
+            </p>
+        </Show>
     }
 }
 

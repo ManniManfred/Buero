@@ -31,6 +31,7 @@ pub fn Settings() -> impl IntoView {
                 </Show>
                 <Show when=is_desktop>
                     <crate::components::drive::DriveSection />
+                    <crate::components::drive::AutostartSection />
                     <crate::components::update::UpdateSection />
                     <hr />
                 </Show>

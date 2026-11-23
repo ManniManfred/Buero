@@ -11,13 +11,13 @@ description = "Büro – Desktop-Client"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-[target.'cfg(windows)'.build-dependencies]
-# WinFsp-DLL wird erst beim Einbinden geladen (fehlt WinFsp, startet Büro trotzdem)
-winfsp = { version = "0.13", default-features = false, features = ["delayload"] }
-
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
+# Mit Windows starten (Registry „Run“), Linux: ~/.config/autostart
+tauri-plugin-autostart = "2"
+# Zweiter Start holt das laufende Fenster nach vorn (Sync-Ordner nur einmal verbinden)
+tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 serde.workspace = true
 serde_json.workspace = true

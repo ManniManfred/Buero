@@ -371,9 +371,14 @@ wieder trennt bzw. aushängt.
   „Entfernen“ beendet den Abgleich und meldet den Ordner bei Windows ab
   (geladene Dateien bleiben). Wird die Sammlung am Server gelöscht, bleibt der
   Ordner unangetastet und die Einstellungen melden das.
-- **Windows – Laufwerk:** alternativ als eigener Laufwerksbuchstabe `B:` (oder
-  der nächste freie) über [WinFsp](https://winfsp.dev/rel/).
-- **Linux:** als Ordner, standardmäßig `~/Büro` (FUSE).
+- **Linux:** als Laufwerk in einem Ordner, standardmäßig `~/Büro` (FUSE).
+
+Abgeglichen wird, solange Büro läuft. Ist ein Sync-Ordner oder Laufwerk
+verbunden, schließt „Schließen“ nur das Fenster; Büro bleibt im Infobereich
+(Tray) und wird erst über dessen Menü „Beenden“ beendet. Mit „Beim Anmelden
+am Computer starten“ in den Einstellungen startet Büro automatisch und
+unsichtbar im Infobereich; das Fenster erscheint nur, wenn eine Anmeldung
+nötig ist oder nichts abzugleichen ist.
 
 Für beide Arten gilt:
 
@@ -407,9 +412,8 @@ Voraussetzungen:
 
 - **Linux:** FUSE 3 (Paket `fuse3`, bei den gängigen Distributionen
   vorinstalliert).
-- **Windows, Sync-Ordner:** Windows 10 (1709) oder neuer, NTFS-Laufwerk.
-- **Windows, Laufwerk:** [WinFsp](https://winfsp.dev/rel/) einmalig installieren.
-  Fehlt es, zeigt Büro in den Einstellungen einen Link zum Herunterladen.
+- **Windows:** Windows 10 (1709) oder neuer, NTFS-Laufwerk. Kein
+  Zusatzprogramm nötig.
 
 Lokal bauen:
 

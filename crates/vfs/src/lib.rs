@@ -6,13 +6,15 @@
 //! Zwei Arten:
 //! - **Sync-Ordner** (Windows, wie OneDrive/Nextcloud): ein normaler Ordner mit
 //!   Platzhaltern, die erst beim Öffnen geladen werden (Cloud Files API)
-//! - **Laufwerk** (Linux: FUSE, Windows: WinFsp): virtuelles Dateisystem
+//! - **Laufwerk** (nur Linux, FUSE): virtuelles Dateisystem
 //!
 //! Die Struktur der Sammlungen erscheint in beiden Fällen als Ordnerbaum.
 //! Sync-Ordner können außerdem genau einer Sammlung zugeordnet sein (mehrere
 //! Ordner gleichzeitig möglich).
 
 pub mod client;
+// Unter Windows nutzt nur der Sync-Ordner Teile davon (das Laufwerk gibt es dort nicht)
+#[cfg_attr(windows, allow(dead_code))]
 mod core;
 pub mod sync;
 
@@ -20,15 +22,15 @@ pub mod sync;
 mod cloud;
 #[cfg(target_os = "linux")]
 mod fuse;
-#[cfg(windows)]
-mod winfs;
 
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", windows))]
 use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::Mutex;
 
 pub use crate::core::INBOX_NAME;
+#[cfg(target_os = "linux")]
 use crate::core::Vfs;
 
 /// Art der Einbindung
@@ -36,7 +38,7 @@ use crate::core::Vfs;
 pub enum Mode {
     /// Echter Ordner mit Platzhaltern (nur Windows)
     SyncFolder,
-    /// Virtuelles Laufwerk (FUSE / WinFsp)
+    /// Virtuelles Laufwerk (nur Linux, FUSE)
     Drive,
 }
 
@@ -60,7 +62,7 @@ impl Mode {
 /// Auf diesem System mögliche Arten, die empfohlene zuerst
 pub fn modes() -> Vec<Mode> {
     if cfg!(windows) {
-        vec![Mode::SyncFolder, Mode::Drive]
+        vec![Mode::SyncFolder]
     } else if cfg!(target_os = "linux") {
         vec![Mode::Drive]
     } else {
@@ -74,7 +76,7 @@ pub struct Options {
     pub server: String,
     pub token: Option<String>,
     pub mode: Mode,
-    /// Sync-Ordner bzw. Einhängepunkt (Linux: Ordner, Windows: `B:` oder leerer Ordner)
+    /// Sync-Ordner (Windows) bzw. Einhängepunkt (Linux)
     pub mount_point: PathBuf,
     /// Zwischenspeicher für geladene Dateien
     pub cache_dir: PathBuf,
@@ -84,14 +86,13 @@ pub struct Options {
 
 #[allow(clippy::large_enum_variant)]
 enum Inner {
+    #[cfg(target_os = "linux")]
     #[allow(dead_code)]
-    Vfs {
-        vfs: Arc<Vfs>,
-        #[cfg(target_os = "linux")]
-        mount: fuse::Mount,
-        #[cfg(windows)]
-        mount: winfs::Mount,
-    },
+    Vfs { vfs: Arc<Vfs>, mount: fuse::Mount },
+    /// Andere Systeme: nichts einbindbar
+    #[cfg(not(any(target_os = "linux", windows)))]
+    #[allow(dead_code)]
+    Unsupported,
     #[cfg(windows)]
     #[allow(dead_code)]
     Sync { mount: cloud::Mount, errors: Arc<Mutex<Option<String>>> },
@@ -122,9 +123,12 @@ impl Drive {
     /// Letzter Fehler beim Hochladen oder Abgleichen
     pub fn last_error(&self) -> Option<String> {
         match &self.inner {
+            #[cfg(target_os = "linux")]
             Inner::Vfs { vfs, .. } => vfs.last_error(),
             #[cfg(windows)]
             Inner::Sync { errors, .. } => errors.lock().ok()?.clone(),
+            #[cfg(not(any(target_os = "linux", windows)))]
+            Inner::Unsupported => None,
         }
     }
 }
@@ -138,21 +142,11 @@ pub fn default_mount_point(mode: Mode) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/tmp" }));
     match mode {
-        Mode::SyncFolder => home.join("Büro"),
-        Mode::Drive => {
-            #[cfg(windows)]
-            {
-                winfs::free_drive_letter().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("B:"))
-            }
-            #[cfg(not(windows))]
-            {
-                home.join("Büro")
-            }
-        }
+        Mode::SyncFolder | Mode::Drive => home.join("Büro"),
     }
 }
 
-/// Prüft, ob die Systemvoraussetzungen erfüllt sind (FUSE, WinFsp bzw. Windows-Version).
+/// Prüft, ob die Systemvoraussetzungen erfüllt sind (FUSE bzw. Windows-Version).
 pub fn check_available(mode: Mode) -> Result<(), String> {
     match mode {
         Mode::SyncFolder => {
@@ -181,11 +175,11 @@ pub fn check_available(mode: Mode) -> Result<(), String> {
             }
             #[cfg(windows)]
             {
-                winfs::check_available()
+                Err("Unter Windows gibt es nur den Sync-Ordner.".into())
             }
             #[cfg(not(any(target_os = "linux", windows)))]
             {
-                Err("Das Laufwerk gibt es nur unter Linux und Windows.".into())
+                Err("Das Laufwerk gibt es nur unter Linux.".into())
             }
         }
     }
@@ -218,24 +212,18 @@ pub fn mount(o: Options) -> Result<Drive, String> {
             return Err("Den Sync-Ordner gibt es nur unter Windows.".into());
         }
     }
-    let vfs = Arc::new(
-        Vfs::new(client, o.cache_dir, cfg!(windows)).map_err(|e| format!("Zwischenspeicher: {e}"))?,
-    );
-    vfs.refresh(true).map_err(|e| format!("Laden fehlgeschlagen: {e:?}"))?;
     #[cfg(target_os = "linux")]
     {
+        let vfs = Arc::new(Vfs::new(client, o.cache_dir, false).map_err(|e| format!("Zwischenspeicher: {e}"))?);
+        vfs.refresh(true).map_err(|e| format!("Laden fehlgeschlagen: {e:?}"))?;
         let mount = fuse::mount(vfs.clone(), &o.mount_point)?;
         Ok(Drive { mode: o.mode, collection: None, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount } })
     }
-    #[cfg(windows)]
+    #[cfg(not(target_os = "linux"))]
     {
-        let mount = winfs::mount(vfs.clone(), &o.mount_point)?;
-        Ok(Drive { mode: o.mode, collection: None, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount } })
-    }
-    #[cfg(not(any(target_os = "linux", windows)))]
-    {
-        let _ = vfs;
-        Err("Das Laufwerk gibt es nur unter Linux und Windows.".into())
+        // Unerreichbar: check_available lehnt das Laufwerk hier ab
+        let _ = client;
+        Err("Das Laufwerk gibt es nur unter Linux.".into())
     }
 }
 

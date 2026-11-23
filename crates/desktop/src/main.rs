@@ -7,8 +7,11 @@
 //! (Rust/Leptos, nach WebAssembly kompiliert) und spricht dieselbe HTTP-API an.
 //! Unterschiede: Server-Adresse ist frei wählbar, Dateien werden mit dem
 //! Standardprogramm des Systems geöffnet, und die Sammlungen lassen sich in
-//! den Dateimanager einbinden (Windows: Sync-Ordner wie OneDrive oder Laufwerk
-//! über WinFsp, Linux: FUSE).
+//! den Dateimanager einbinden (Windows: Sync-Ordner wie OneDrive, Linux:
+//! Laufwerk über FUSE).
+//!
+//! Solange ein Laufwerk oder Sync-Ordner verbunden ist, muss Büro laufen:
+//! „Schließen“ blendet das Fenster dann nur aus, Büro bleibt im Infobereich.
 //!
 //! Updates kommen vom eigenen Büro-Server (`/api/desktop/update`), damit die
 //! App zur Version des Servers passt. Installiert wird nur, was mit dem
@@ -20,7 +23,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, RunEvent, State};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -48,13 +54,35 @@ struct FolderSetting {
 }
 
 impl DriveSettings {
-    fn mode(&self) -> buero_vfs::Mode {
+    /// Gespeicherte Art (ältere Einstellungen ohne Art: wer schon eingebunden
+    /// hat, hatte ein Laufwerk)
+    fn saved_mode(&self) -> Option<buero_vfs::Mode> {
         match self.mode.as_deref().and_then(buero_vfs::Mode::parse) {
-            Some(m) => m,
-            // Wer schon ein Laufwerk eingerichtet hat, behält es; sonst die Empfehlung
-            None if self.enabled || self.mount_point.is_some() => buero_vfs::Mode::Drive,
-            None => buero_vfs::modes().first().copied().unwrap_or(buero_vfs::Mode::Drive),
+            Some(m) => Some(m),
+            None if self.enabled || self.mount_point.is_some() => Some(buero_vfs::Mode::Drive),
+            None => None,
         }
+    }
+
+    fn mode(&self) -> buero_vfs::Mode {
+        let modes = buero_vfs::modes();
+        // Nicht (mehr) vorhandene Art (z. B. das frühere WinFsp-Laufwerk): die Empfehlung
+        self.saved_mode()
+            .filter(|m| modes.contains(m))
+            .or_else(|| modes.first().copied())
+            .unwrap_or(buero_vfs::Mode::Drive)
+    }
+
+    /// Gespeicherter Ort, sofern er zur Art passt (ein früherer Laufwerks-
+    /// buchstabe taugt nicht als Sync-Ordner)
+    fn mount_point(&self) -> Option<String> {
+        self.mount_point.clone().filter(|_| self.saved_mode() == Some(self.mode()))
+    }
+
+    /// Beim Start einbinden? Nicht, wenn die eingerichtete Art weggefallen ist
+    /// (dann soll nicht ungefragt ein Sync-Ordner entstehen)
+    fn enabled(&self) -> bool {
+        self.enabled && self.saved_mode() == Some(self.mode())
     }
 }
 
@@ -94,7 +122,7 @@ struct FolderStatus {
 #[derive(Serialize)]
 struct DriveStatus {
     supported: bool,
-    /// Fehlende Systemvoraussetzung (FUSE/WinFsp) der gewählten Art, sonst `None`
+    /// Fehlende Systemvoraussetzung (FUSE bzw. Windows-Version) der gewählten Art, sonst `None`
     unavailable: Option<String>,
     enabled: bool,
     mounted: bool,
@@ -134,15 +162,14 @@ fn status(app: &tauri::AppHandle, st: &DriveState) -> DriveStatus {
     let mount_point = match &*m {
         Some(m) => m.drive.mount_point().display().to_string(),
         None => s
-            .mount_point
-            .clone()
+            .mount_point()
             .filter(|_| s.mode() == mode)
             .unwrap_or_else(|| buero_vfs::default_mount_point(mode).display().to_string()),
     };
     DriveStatus {
         supported: buero_vfs::SUPPORTED,
         unavailable: buero_vfs::check_available(mode).err(),
-        enabled: s.enabled,
+        enabled: s.enabled(),
         mounted: m.is_some(),
         mode: mode.as_str().into(),
         modes: buero_vfs::modes()
@@ -298,9 +325,9 @@ async fn folder_add(
     let taken = |p: &str| {
         let p = p.trim_end_matches(['\\', '/']).to_lowercase();
         s.folders.iter().any(|f| f.collection_id != collection_id && f.path.trim_end_matches(['\\', '/']).to_lowercase() == p)
-            || (s.enabled
+            || (s.enabled()
                 && s.mode() == buero_vfs::Mode::SyncFolder
-                && s.mount_point.as_deref().map(|m| m.trim_end_matches(['\\', '/']).to_lowercase()) == Some(p))
+                && s.mount_point().map(|m| m.trim_end_matches(['\\', '/']).to_lowercase()) == Some(p))
     };
     if taken(&path) {
         return Err(format!("„{path}“ wird schon für einen anderen Sync-Ordner verwendet."));
@@ -363,8 +390,8 @@ async fn drive_sync(
         .as_ref()
         .map(|m| (m.server.clone(), m.token.clone()));
     let mode = s.mode();
-    if s.enabled && current != Some((server.clone(), token.clone())) && buero_vfs::check_available(mode).is_ok() {
-        do_mount(&app, &st, server.clone(), token.clone(), mode, s.mount_point.clone()).await?;
+    if s.enabled() && current != Some((server.clone(), token.clone())) && buero_vfs::check_available(mode).is_ok() {
+        do_mount(&app, &st, server.clone(), token.clone(), mode, s.mount_point()).await?;
     }
     // Sync-Ordner der Sammlungen; ein Fehler hält die anderen nicht auf
     if buero_vfs::check_available(buero_vfs::Mode::SyncFolder).is_ok() {
@@ -491,9 +518,93 @@ async fn update_install(
     app.restart()
 }
 
+// ---------------------------------------------------------------------------
+// Infobereich (Tray)
+// ---------------------------------------------------------------------------
+
+/// Ist ein Laufwerk oder Sync-Ordner verbunden? Dann muss Büro weiterlaufen,
+/// sonst wird nichts mehr abgeglichen und Platzhalter lassen sich nicht laden.
+fn sync_active(st: &DriveState) -> bool {
+    st.mounted.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+        || !st.folders.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
+/// Hauptfenster zeigen und nach vorn holen
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// Fenster zeigen (die Oberfläche ruft das, wenn sie Eingaben braucht, z. B.
+/// nach einem versteckten Autostart ohne gültige Anmeldung)
+#[tauri::command]
+fn show_window(app: tauri::AppHandle) {
+    show_main(&app);
+}
+
+// ---------------------------------------------------------------------------
+// Autostart
+// ---------------------------------------------------------------------------
+
+/// Kennzeichen des Starts bei der Anmeldung (wird im Autostart-Eintrag hinterlegt)
+const AUTOSTART_ARG: &str = "--autostart";
+
+/// Startet Büro mit der Anmeldung am System?
+#[tauri::command]
+fn autostart_get(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Autostart ein- oder ausschalten
+#[tauri::command]
+fn autostart_set(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    let al = app.autolaunch();
+    if enabled { al.enable() } else { al.disable() }.map_err(|e| format!("Autostart: {e}"))?;
+    al.is_enabled().map_err(|e| e.to_string())
+}
+
+/// Beim Autostart nur im Infobereich starten, wenn es etwas abzugleichen gibt;
+/// sonst (und bei jedem normalen Start) das Fenster zeigen.
+fn start_hidden(app: &tauri::AppHandle) -> bool {
+    let s = load_settings(app);
+    std::env::args().any(|a| a == AUTOSTART_ARG) && (s.enabled() || !s.folders.is_empty())
+}
+
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "Büro öffnen", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("Büro")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => show_main(app),
+            // Beim Beenden trennt RunEvent::Exit Laufwerk und Sync-Ordner
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                show_main(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
+        // Muss als erstes Plugin stehen
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::Builder::new().args([AUTOSTART_ARG]).build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DriveState::default())
         .manage(UpdateState::default())
@@ -506,8 +617,30 @@ fn main() {
             folder_add,
             folder_remove,
             update_check,
-            update_install
+            update_install,
+            show_window,
+            autostart_get,
+            autostart_set
         ])
+        .setup(|app| {
+            setup_tray(app.handle())?;
+            // Das Fenster startet unsichtbar (tauri.conf.json), damit es beim
+            // Autostart nicht kurz aufblitzt
+            if !start_hidden(app.handle()) {
+                show_main(app.handle());
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Schließen bei verbundenem Sync-Ordner: nur ausblenden, Büro läuft im
+            // Infobereich weiter (Beenden über dessen Menü)
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" && sync_active(&window.app_handle().state::<DriveState>()) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("Fehler beim Starten von Büro")
         .run(|app, event| {

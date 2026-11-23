@@ -538,19 +538,6 @@ impl Vfs {
         self.attr(&st, ino, &key)
     }
 
-    /// Pfad (mit `/` oder `\` getrennt) auflösen
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn resolve(&self, path: &str) -> Result<Attr> {
-        let mut attr = self.getattr(ROOT_INO)?;
-        for part in path.split(['/', '\\']).filter(|p| !p.is_empty()) {
-            if attr.kind != Kind::Dir {
-                return Err(Error::NotDir);
-            }
-            attr = self.lookup(attr.ino, part)?;
-        }
-        Ok(attr)
-    }
-
     pub fn readdir(&self, ino: Ino) -> Result<Vec<(String, Attr)>> {
         self.refresh(false)?;
         let mut st = self.lock();
@@ -894,37 +881,6 @@ impl Vfs {
             }
         }
         res
-    }
-
-    /// Handle schließen, ohne Änderungen hochzuladen (Datei wird gelöscht)
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn discard(&self, fh: u64) {
-        let h = self.lock().handles.remove(&fh);
-        if let Some(h) = h {
-            drop(h.file);
-            if h.work_copy {
-                let _ = std::fs::remove_file(&h.path);
-            }
-        }
-    }
-
-    /// Darf das Objekt gelöscht werden? (Windows fragt vorher)
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn can_delete(&self, ino: Ino) -> Result<()> {
-        let st = self.lock();
-        match st.key(ino)? {
-            Key::Dir(Dir::Coll(c)) => {
-                let has_entries = st.snap.entries.get(&Dir::Coll(c)).is_some_and(|e| !e.is_empty());
-                if has_entries || st.locals.values().any(|l| l.dir == Dir::Coll(c)) {
-                    Err(Error::NotEmpty)
-                } else {
-                    Ok(())
-                }
-            }
-            Key::Dir(_) => Err(Error::Perm),
-            Key::Doc(Dir::Root, _) => Err(Error::Perm),
-            _ => Ok(()),
-        }
     }
 
     /// Nicht hochladbare Änderungen nicht verwerfen, sondern beiseitelegen
