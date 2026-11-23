@@ -26,6 +26,7 @@ pub fn Toolbar() -> impl IntoView {
 pub fn SearchRow() -> impl IntoView {
     let c = ctx();
     let file_input = NodeRef::<leptos::html::Input>::new();
+    let search_input = NodeRef::<leptos::html::Input>::new();
 
     view! {
             <button class="icon mobile-only" title="Übersicht" aria-label="Übersicht" on:click=move |_| c.dashboard.set(true)>
@@ -33,11 +34,22 @@ pub fn SearchRow() -> impl IntoView {
             </button>
             <div class="search">
                 <Icon name="search" class="search-icon" />
-                <input id="search" type="search" autocomplete="off" spellcheck="false"
+                <input id="search" node_ref=search_input type="search" autocomplete="off" spellcheck="false"
                     placeholder="Dokumente durchsuchen …  (Taste /)"
                     prop:value=move || c.query.get()
                     on:input=move |ev| c.query.set(event_target_value(&ev)) />
-                <Show when=move || c.loading.get()><span class="spinner"></span></Show>
+                <Show when=move || c.loading.get()>
+                    <span class="spinner" class:shifted=move || !c.query.with(String::is_empty)></span>
+                </Show>
+                <Show when=move || !c.query.with(String::is_empty)>
+                    <button type="button" class="icon search-clear" title="Suche löschen" aria-label="Suche löschen"
+                        on:click=move |_| {
+                            c.query.set(String::new());
+                            if let Some(i) = search_input.get_untracked() { let _ = i.focus(); }
+                        }>
+                        <Icon name="x" />
+                    </button>
+                </Show>
             </div>
             <select class="sort" on:change=move |ev| c.sort.set(event_target_value(&ev)) prop:value=move || c.sort.get()>
                 <option value="">"Sortierung: automatisch"</option>

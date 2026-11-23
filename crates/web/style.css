@@ -108,6 +108,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
   position: absolute; right: 12px; width: 16px; height: 16px; border-radius: 50%;
   border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .7s linear infinite;
 }
+.spinner.shifted { right: 44px; }
+.search-clear { position: absolute; right: 6px; padding: 4px; color: var(--muted); }
+.search-clear:hover { color: var(--text); }
+.search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .filterbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px; align-items: center; min-height: 36px; }
 .bulkbar {
