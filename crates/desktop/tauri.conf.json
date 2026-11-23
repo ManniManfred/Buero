@@ -49,7 +49,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCQjQ1RTZGNzhFRkE0RTUKUldUbHBPOTRiMTYwVzFRQXcvTUhabDlzL2U4dDdNZUMwSVZ3dUczLzZIOExlWGd0Q3h3WGcrd08K",
       "dangerousInsecureTransportProtocol": true,
       "requireSignedVersion": true
     }
