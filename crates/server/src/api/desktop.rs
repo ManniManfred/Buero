@@ -261,8 +261,8 @@ mod tests {
     fn files() {
         assert!(matches("Buero_0.4.0_x64-setup.exe", "windows", "x86_64", "nsis"));
         assert!(matches("Buero_0.4.0_x64-setup.exe", "windows", "x86_64", ""));
-        assert!(!matches("Buero_0.4.0_x64_en-US.msi", "windows", "x86_64", "nsis"));
-        assert!(matches("Buero_0.4.0_x64_en-US.msi", "windows", "x86_64", "msi"));
+        assert!(!matches("Buero_0.4.0_x64_de-DE.msi", "windows", "x86_64", "nsis"));
+        assert!(matches("Buero_0.4.0_x64_de-DE.msi", "windows", "x86_64", "msi"));
         assert!(matches("Buero_0.4.0_amd64.AppImage", "linux", "x86_64", "appimage"));
         assert!(matches("Buero-0.4.0-1.x86_64.rpm", "linux", "x86_64", "rpm"));
         assert!(!matches("Buero_0.4.0_amd64.deb", "linux", "aarch64", "deb"));

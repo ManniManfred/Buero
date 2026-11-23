@@ -41,7 +41,11 @@
     "copyright": "Copyright (C) 2026 Manfred Roßkamp",
     "license": "AGPL-3.0-or-later",
     "licenseFile": "../../LICENSE",
-    "shortDescription": "Dokumentenverwaltung"
+    "shortDescription": "Dokumentenverwaltung",
+    "windows": {
+      "wix": { "language": "de-DE" },
+      "nsis": { "languages": ["German"], "displayLanguageSelector": false }
+    }
   },
   "plugins": {
     "updater": {
