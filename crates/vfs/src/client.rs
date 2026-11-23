@@ -45,7 +45,17 @@ type Resp = ureq::http::Response<ureq::Body>;
 
 impl Client {
     pub fn new(base: &str, token: Option<String>) -> Self {
-        let agent = ureq::Agent::config_builder()
+        let builder = ureq::Agent::config_builder();
+        // Unter Windows ist nur das Feature "native-tls" aktiv (SChannel + Windows-Zertifikatsspeicher);
+        // ureq wählt standardmäßig Rustls und bricht dann bei https ab.
+        #[cfg(windows)]
+        let builder = builder.tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        );
+        let agent = builder
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(15)))
             .user_agent("Buero-Desktop")
