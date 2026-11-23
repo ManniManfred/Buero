@@ -539,3 +539,4 @@ button.danger-solid:hover { filter: brightness(1.08); border-color: var(--danger
 @keyframes dialog-fade { from { opacity: 0; } }
 @keyframes dialog-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
 @media (prefers-reduced-motion: reduce) { .dialog-bg, .dialog { animation: none; } }
+.sub-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--muted); }

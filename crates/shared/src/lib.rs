@@ -107,6 +107,9 @@ pub struct SearchParams {
     /// Kommagetrennte Sammlungs-IDs (UND-verknüpft, inkl. Untersammlungen)
     #[serde(default)]
     pub collections: String,
+    /// Sammlungen nur direkt, ohne Dokumente aus Untersammlungen
+    #[serde(default)]
+    pub direct: bool,
     /// Kommagetrennte Tag-IDs (UND-verknüpft)
     #[serde(default)]
     pub tags: String,

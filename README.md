@@ -45,7 +45,8 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
   - **Sammlungen** sind hierarchisch (beliebig tief) – und ein Dokument kann in
     **beliebig vielen** Sammlungen gleichzeitig liegen (z. B. *Finanzen / Rechnungen*
     **und** *Steuererklärung 2026* **und** *Wohnung*). Filtern nach einer Sammlung
-    zeigt auch alles aus ihren Untersammlungen.
+    zeigt deren eigene Dokumente; mit „inkl. Untersammlungen“ auch alles aus
+    ihren Untersammlungen.
   - **Tags** (farbig) zusätzlich, ebenfalls beliebig viele pro Dokument.
   - **Eingang**: alle Dokumente, die noch keiner Sammlung zugeordnet sind.
   - Zuordnen per Drag & Drop (Dokument auf Sammlung ziehen), im Detailbereich

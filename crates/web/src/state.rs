@@ -36,6 +36,8 @@ pub struct Ctx {
 
     pub query: RwSignal<String>,
     pub collection: RwSignal<Option<i64>>,
+    /// Bei gewählter Sammlung auch Dokumente aus Untersammlungen zeigen
+    pub include_sub: RwSignal<bool>,
     pub tag_filter: RwSignal<Vec<i64>>,
     pub kind: RwSignal<String>,
     pub unfiled: RwSignal<bool>,
@@ -83,6 +85,7 @@ impl Ctx {
             stats: RwSignal::new(Stats::default()),
             query: RwSignal::new(String::new()),
             collection: RwSignal::new(None),
+            include_sub: RwSignal::new(false),
             tag_filter: RwSignal::new(Vec::new()),
             kind: RwSignal::new(String::new()),
             unfiled: RwSignal::new(false),
@@ -158,6 +161,9 @@ impl Ctx {
         }
         if let Some(c) = self.collection.get_untracked() {
             parts.push(format!("collections={c}"));
+            if !self.include_sub.get_untracked() {
+                parts.push("direct=true".into());
+            }
         }
         let tags = self.tag_filter.get_untracked();
         if !tags.is_empty() {

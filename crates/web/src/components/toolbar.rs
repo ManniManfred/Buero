@@ -84,6 +84,16 @@ fn FilterBar() -> impl IntoView {
                     <Icon name="folder" class="sm" />{c.collection_name(id)}<Icon name="x" class="sm" />
                 </span>
             })}
+            {move || {
+                let id = c.collection.get()?;
+                c.collections.with(|cs| cs.iter().any(|x| x.parent_id == Some(id))).then(|| view! {
+                    <label class="small sub-toggle" title="Auch Dokumente aus den Untersammlungen anzeigen">
+                        <input type="checkbox" prop:checked=move || c.include_sub.get()
+                            on:change=move |ev| c.include_sub.set(event_target_checked(&ev)) />
+                        "inkl. Untersammlungen"
+                    </label>
+                })
+            }}
             {move || c.unfiled.get().then(|| view! {
                 <span class="chip removable" on:click=move |_| c.unfiled.set(false)><Icon name="inbox" class="sm" />"Eingang"<Icon name="x" class="sm" /></span>
             })}

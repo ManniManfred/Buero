@@ -494,6 +494,7 @@ async fn search(st: &AppState, lock: &Lock, args: &Value) -> Result<Value, Strin
     let q = Query_ {
         text: text.clone(),
         collections: collection.into_iter().collect(),
+        direct: false,
         tags: int(args, "tag_id").into_iter().collect(),
         kind: string(args, "kind"),
         unfiled: args.get("unfiled").and_then(Value::as_bool).unwrap_or(false),

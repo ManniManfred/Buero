@@ -30,6 +30,7 @@ pub async fn list(
     let q = Query_ {
         text: p.q.chars().take(500).collect(),
         collections: parse_ids(&p.collections),
+        direct: p.direct,
         tags: parse_ids(&p.tags),
         kind: p.kind.clone(),
         unfiled: p.unfiled,

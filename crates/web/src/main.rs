@@ -199,6 +199,7 @@ fn Main() -> impl IntoView {
     // Filter/Sortierung geändert -> sofort suchen; Suchtext -> kurz entprellt
     Effect::new(move |_| {
         c.collection.track();
+        c.include_sub.track();
         c.tag_filter.track();
         c.kind.track();
         c.unfiled.track();

@@ -250,6 +250,7 @@ pub async fn index_docs(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Inde
                 content,
                 collection_names: all.iter().filter_map(|c| tree.get(c).map(|(_, n)| n.clone())).collect(),
                 collection_ids: all,
+                direct_collection_ids: direct,
                 tag_names: tag_ids.iter().filter_map(|t| tag_names.get(t).cloned()).collect(),
                 tag_ids,
                 kind: shared::kind_for(&ext, &mime).to_string(),

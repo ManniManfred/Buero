@@ -25,7 +25,7 @@ use tantivy::tokenizer::{
 };
 use tantivy::{DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term};
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 const TOKENIZER: &str = "de_stem";
 
 #[derive(Clone, Copy)]
@@ -38,6 +38,7 @@ struct Fields {
     tags_text: Field,
     collections_text: Field,
     collection: Field,
+    direct_collection: Field,
     tag: Field,
     kind: Field,
     unfiled: Field,
@@ -63,6 +64,8 @@ pub struct IndexDoc {
     pub collection_names: Vec<String>,
     /// Sammlungen inkl. aller Vorfahren
     pub collection_ids: Vec<i64>,
+    /// Nur die Sammlungen, in denen das Dokument selbst liegt
+    pub direct_collection_ids: Vec<i64>,
     pub tag_ids: Vec<i64>,
     pub kind: String,
     pub created: i64,
@@ -72,6 +75,8 @@ pub struct IndexDoc {
 pub struct Query_ {
     pub text: String,
     pub collections: Vec<i64>,
+    /// `collections` nur direkt, ohne Dokumente aus Untersammlungen
+    pub direct: bool,
     pub tags: Vec<i64>,
     pub kind: String,
     pub unfiled: bool,
@@ -108,6 +113,7 @@ fn schema() -> (Schema, Fields) {
         tags_text: b.add_text_field("tags", text(false)),
         collections_text: b.add_text_field("collections", text(false)),
         collection: b.add_u64_field("collection_id", INDEXED),
+        direct_collection: b.add_u64_field("direct_collection_id", INDEXED),
         tag: b.add_u64_field("tag_id", INDEXED),
         kind: b.add_text_field("kind", STRING),
         unfiled: b.add_u64_field("unfiled", INDEXED),
@@ -173,6 +179,9 @@ impl SearchIndex {
         }
         for c in &d.collection_ids {
             doc.add_u64(f.collection, *c as u64);
+        }
+        for c in &d.direct_collection_ids {
+            doc.add_u64(f.direct_collection, *c as u64);
         }
         for t in &d.tag_ids {
             doc.add_u64(f.tag, *t as u64);
@@ -333,9 +342,10 @@ impl SearchIndex {
         if let Some(tq) = &text_q {
             clauses.push((Occur::Must, tq.box_clone()));
         }
+        let coll_field = if q.direct { f.direct_collection } else { f.collection };
         for c in &q.collections {
             clauses.push((Occur::Must, Box::new(TermQuery::new(
-                Term::from_field_u64(f.collection, *c as u64),
+                Term::from_field_u64(coll_field, *c as u64),
                 IndexRecordOption::Basic,
             ))));
         }
