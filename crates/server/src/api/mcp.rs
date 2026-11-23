@@ -9,7 +9,8 @@
 //! - Nur lesend – außer der Schlüssel darf ausdrücklich hochladen
 //!   (`can_upload`): dann zusätzlich Dokumente hochladen (`upload_document`,
 //!   `POST /mcp/upload`), Tags vergeben (`add_tags`) und Dokumente in
-//!   Sammlungen einordnen, die bei Bedarf angelegt werden (`add_to_collection`).
+//!   Sammlungen einordnen, die bei Bedarf angelegt werden (`add_to_collection`),
+//!   sowie ein fehlendes Dokumentdatum eintragen (`set_document_dates`).
 //!   Löschen oder Ändern bestehender Dokumente und Sammlungen geht nie.
 //! - Dokumente aus gesperrten Sammlungen (samt Untersammlungen) werden nie
 //!   ausgeliefert, auch nicht als Suchtreffer; gesperrte Sammlungen selbst
@@ -255,7 +256,8 @@ fn instructions(perm: Perm) -> String {
             " Dieser Zugang darf außerdem Dokumente hochladen (upload_document, Datei als Base64; \
              größere Dateien per multipart an POST /mcp/upload mit demselben Schlüssel), \
              Tags vergeben (add_tags) und Dokumente in Sammlungen einordnen (add_to_collection, \
-             fehlende Sammlungen werden angelegt). Löschen oder Ändern geht nicht.",
+             fehlende Sammlungen werden angelegt) sowie ein fehlendes Dokumentdatum eintragen \
+             (set_document_dates). Löschen oder Ändern geht nicht.",
         );
     } else {
         s.push_str(" Der Zugang ist nur lesend.");
@@ -375,6 +377,27 @@ fn tool_defs(perm: Perm) -> Value {
                               "description": "Namen von der obersten Sammlung abwärts" }
                 }
             },
+            "annotations": w.clone()
+        }));
+        arr.push(json!({
+            "name": "set_document_dates",
+            "title": "Dokumentdatum eintragen",
+            "description": "Fachliches Dokumentdatum (JJJJ-MM-TT) für Dokumente eintragen, die noch keins \
+                haben. Ein vorhandenes Datum wird nie überschrieben (dann skipped).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": { "id": { "type": "integer" }, "date": { "type": "string" } },
+                            "required": ["id", "date"]
+                        }
+                    }
+                },
+                "required": ["items"]
+            },
             "annotations": w
         }));
     }
@@ -384,12 +407,13 @@ fn tool_defs(perm: Perm) -> Value {
 async fn call_tool(st: &AppState, name: &str, args: &Value, perm: Perm) -> Result<String, String> {
     let lock = Lock::load(st).await.map_err(|e| e.message)?;
     let r = match name {
-        "upload_document" | "add_tags" | "add_to_collection" if !perm.can_upload => {
+        "upload_document" | "add_tags" | "add_to_collection" | "set_document_dates" if !perm.can_upload => {
             return Err("Dieser Zugangsschlüssel darf nicht hochladen".into())
         }
         "upload_document" => upload_document(st, &lock, args).await,
         "add_tags" => add_tags(st, &lock, args).await,
         "add_to_collection" => add_to_collection(st, &lock, args).await,
+        "set_document_dates" => set_document_dates(st, &lock, args).await,
         "search_documents" => search(st, &lock, args).await,
         "get_document" => get_document(st, &lock, args).await,
         "list_collections" => list_collections(st, &lock).await,
@@ -852,6 +876,50 @@ async fn add_to_collection(st: &AppState, lock: &Lock, args: &Value) -> Result<V
     st.reindex(&docs).await.map_err(err)?;
     let tree = db::collection_tree(&st.pool).await.map_err(err)?;
     Ok(json!({ "collection_id": collection, "path": paths(&tree, &[collection]).remove(0), "documents": docs.len() }))
+}
+
+async fn set_document_dates(st: &AppState, lock: &Lock, args: &Value) -> Result<Value, String> {
+    let items: Vec<(i64, String)> = match args.get("items") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| Some((int(v, "id")?, string(v, "date").trim().to_string())))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if items.is_empty() {
+        return Err("Parameter items fehlt".into());
+    }
+    if items.len() > 1000 {
+        return Err("Höchstens 1000 Einträge auf einmal".into());
+    }
+    if let Some((id, d)) = items.iter().find(|(_, d)| !crate::util::valid_date(d)) {
+        return Err(format!("Ungültiges Datum für Dokument {id}: {d} (erwartet JJJJ-MM-TT)"));
+    }
+    let ids: Vec<i64> = items.iter().map(|(id, _)| *id).collect();
+    let visible: HashSet<i64> = db::summaries(&st.pool, &ids)
+        .await
+        .map_err(err)?
+        .into_iter()
+        .filter(|d| !lock.blocks(&d.collection_ids))
+        .map(|d| d.id)
+        .collect();
+    let missing: Vec<i64> = ids.iter().copied().filter(|i| !visible.contains(i)).collect();
+    if !missing.is_empty() {
+        return Err(format!("Dokument(e) nicht gefunden: {missing:?}"));
+    }
+    let (mut set, mut skipped) = (Vec::new(), Vec::new());
+    for (id, date) in &items {
+        let n = sqlx::query("UPDATE documents SET document_date = ? WHERE id = ? AND IFNULL(document_date, '') = ''")
+            .bind(date)
+            .bind(id)
+            .execute(&st.pool)
+            .await
+            .map_err(err)?
+            .rows_affected();
+        if n > 0 { set.push(*id) } else { skipped.push(*id) }
+    }
+    st.reindex(&set).await.map_err(err)?;
+    Ok(json!({ "set": set.len(), "skipped": skipped }))
 }
 
 /// `POST /mcp/upload`: Dateien per multipart hochladen (Felder wie bei

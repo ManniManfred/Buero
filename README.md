@@ -67,8 +67,8 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
   Einzelne Schlüssel dürfen auf Wunsch (Häkchen „Hochladen“ in den
   Einstellungen) zusätzlich **Dokumente hochladen, Tags vergeben und in Sammlungen
   einordnen** – nie löschen oder ändern: per MCP mit `upload_document` (Datei
-  als Base64), `add_tags` und `add_to_collection` (fehlende Sammlungen im Pfad
-  werden angelegt), größere Dateien per multipart an `POST /mcp/upload`
+  als Base64), `add_tags`, `add_to_collection` (fehlende Sammlungen im Pfad
+  werden angelegt) und `set_document_dates` (nur wo noch kein Datum steht), größere Dateien per multipart an `POST /mcp/upload`
   (Felder wie beim normalen Upload, Tags als Namen, fehlende werden angelegt):
   `curl -H "Authorization: Bearer bmcp_…" -F file=@brief.pdf -F tags=jagdhorn https://…/mcp/upload`
 - **Datensicherung**: Backup als tar-Archiv herunterladen und wieder einspielen,

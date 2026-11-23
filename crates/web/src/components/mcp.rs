@@ -98,7 +98,7 @@ pub fn McpSection() -> impl IntoView {
         <p class="muted small">
             "KI-Assistenten wie Claude können über "<code>{endpoint}</code>" Dokumente suchen und den erkannten Text lesen – "
             "nur mit einem Zugangsschlüssel von hier, normalerweise nur lesend. Schlüssel mit „Hochladen“ dürfen zusätzlich "
-            "Dokumente hochladen, Tags vergeben und in Sammlungen einordnen, aber nie löschen oder ändern. Gelesene Inhalte gehen an den Anbieter des Assistenten. "
+            "Dokumente hochladen, Tags vergeben, in Sammlungen einordnen und ein fehlendes Datum eintragen, aber nie löschen oder ändern. Gelesene Inhalte gehen an den Anbieter des Assistenten. "
             "Sammlungen lassen sich über „Bearbeiten“ sperren; ihre Dokumente (samt Untersammlungen) liefert der Zugang nie aus."
         </p>
         <p class="small">
