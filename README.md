@@ -48,6 +48,8 @@ Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
     **und** *Steuererklärung 2026* **und** *Wohnung*). Filtern nach einer Sammlung
     zeigt deren eigene Dokumente; mit „inkl. Untersammlungen“ auch alles aus
     ihren Untersammlungen.
+    In der Seitenleiste sind anfangs die ersten beiden Ebenen zu sehen; ab mehr
+    als fünf Sammlungen hilft ein Suchfeld, eine Sammlung samt Pfad zu finden.
   - **Tags** (farbig) zusätzlich, ebenfalls beliebig viele pro Dokument.
   - **Eingang**: alle Dokumente, die noch keiner Sammlung zugeordnet sind.
   - Zuordnen per Drag & Drop (Dokument auf Sammlung ziehen), im Detailbereich

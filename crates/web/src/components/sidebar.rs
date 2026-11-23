@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Manfred Roßkamp
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -58,7 +58,33 @@ fn create_collection(c: Ctx, parent: Option<i64>) {
 #[component]
 pub fn Sidebar() -> impl IntoView {
     let c = ctx();
-    let collapsed = RwSignal::new(HashSet::<i64>::new());
+    // Auf-/zugeklappt per Klick; sonst offen bis Ebene 2 (siehe `tree_level`)
+    let open = RwSignal::new(HashMap::<i64, bool>::new());
+    let filter = RwSignal::new(String::new());
+    // Gewählte Sammlung sichtbar machen: Vorfahren aufklappen
+    Effect::new(move |_| {
+        let Some(id) = c.collection.get() else { return };
+        let ancestors = c.collections.with_untracked(|cs| {
+            let mut out = Vec::new();
+            let mut cur = cs.iter().find(|x| x.id == id).and_then(|x| x.parent_id);
+            while let Some(p) = cur {
+                if out.contains(&p) {
+                    break;
+                }
+                out.push(p);
+                cur = cs.iter().find(|x| x.id == p).and_then(|x| x.parent_id);
+            }
+            out
+        });
+        let closed = |a: &i64| !open.with_untracked(|o| o.get(a).copied().unwrap_or_else(|| !depth_closed(c, *a)));
+        if ancestors.iter().any(closed) {
+            open.update(|o| {
+                for a in ancestors {
+                    o.insert(a, true);
+                }
+            });
+        }
+    });
 
     let select_all = move |_| {
         c.collection.set(None);
@@ -99,8 +125,27 @@ pub fn Sidebar() -> impl IntoView {
                 <span>"Sammlungen"</span>
                 <button class="icon" title="Neue Sammlung" on:click=move |_| create_collection(c, None)><Icon name="plus" class="sm" /></button>
             </div>
+            <Show when=move || c.collections.with(|v| v.len() > 5)>
+                <div class="tree-search">
+                    <Icon name="search" class="sm" />
+                    <input type="search" placeholder="Sammlung suchen …" spellcheck="false"
+                        prop:value=move || filter.get()
+                        on:input=move |ev| filter.set(event_target_value(&ev))
+                        on:keydown=move |ev| if ev.key() == "Escape" { ev.stop_propagation(); filter.set(String::new()); } />
+                    <Show when=move || !filter.with(String::is_empty)>
+                        <button class="icon" title="Suche löschen" on:click=move |_| filter.set(String::new())><Icon name="x" class="sm" /></button>
+                    </Show>
+                </div>
+            </Show>
             <div class="tree">
-                {move || tree_level(c, collapsed, None, 0)}
+                {move || {
+                    let visible = filter.with(|f| matching(c, f));
+                    let empty = visible.as_ref().is_some_and(HashSet::is_empty);
+                    view! {
+                        {tree_level(c, open, visible, None, 0)}
+                        {empty.then(|| view! { <p class="muted small">"Keine passende Sammlung"</p> })}
+                    }
+                }}
                 <Show when=move || c.collections.with(|v| v.is_empty())>
                     <p class="muted small">"Noch keine Sammlungen. Ein Dokument kann in beliebig vielen Sammlungen liegen."</p>
                 </Show>
@@ -151,16 +196,75 @@ pub fn Sidebar() -> impl IntoView {
     }
 }
 
-fn tree_level(c: Ctx, collapsed: RwSignal<HashSet<i64>>, parent: Option<i64>, depth: usize) -> AnyView {
-    let children: Vec<Collection> = c
-        .collections
-        .with(|cs| cs.iter().filter(|x| x.parent_id == parent).cloned().collect());
+/// Standard beim Start: nur die oberste Ebene aufgeklappt (Ebene 1 und 2 sichtbar)
+fn open_by_default(depth: usize) -> bool {
+    depth == 0
+}
+
+/// Ist eine Sammlung ohne Klick zugeklappt?
+fn depth_closed(c: Ctx, id: i64) -> bool {
+    let depth = c.collections.with_untracked(|cs| {
+        let mut d = 0;
+        let mut cur = cs.iter().find(|x| x.id == id).and_then(|x| x.parent_id);
+        while let Some(p) = cur {
+            d += 1;
+            if d > 64 {
+                break;
+            }
+            cur = cs.iter().find(|x| x.id == p).and_then(|x| x.parent_id);
+        }
+        d
+    });
+    !open_by_default(depth)
+}
+
+/// Für Vergleiche: klein, ohne Umlaute
+fn norm(s: &str) -> String {
+    s.to_lowercase().replace('ä', "a").replace('ö', "o").replace('ü', "u").replace('ß', "ss")
+}
+
+/// Bei Suche: passende Sammlungen samt ihrer Vorfahren (`None` = keine Suche)
+fn matching(c: Ctx, filter: &str) -> Option<HashSet<i64>> {
+    let f = norm(filter.trim());
+    if f.is_empty() {
+        return None;
+    }
+    c.collections.with(|cs| {
+        let mut out = HashSet::new();
+        for col in cs.iter().filter(|x| norm(&x.name).contains(&f)) {
+            let mut cur = Some(col.id);
+            while let Some(id) = cur {
+                if !out.insert(id) {
+                    break;
+                }
+                cur = cs.iter().find(|x| x.id == id).and_then(|x| x.parent_id);
+            }
+        }
+        Some(out)
+    })
+}
+
+fn tree_level(
+    c: Ctx,
+    open: RwSignal<HashMap<i64, bool>>,
+    visible: Option<HashSet<i64>>,
+    parent: Option<i64>,
+    depth: usize,
+) -> AnyView {
+    let children: Vec<Collection> = c.collections.with(|cs| {
+        cs.iter()
+            .filter(|x| x.parent_id == parent && visible.as_ref().is_none_or(|v| v.contains(&x.id)))
+            .cloned()
+            .collect()
+    });
+    let searching = visible.is_some();
     children
         .into_iter()
         .map(|col| {
             let id = col.id;
             let has_children = c.collections.with(|cs| cs.iter().any(|x| x.parent_id == Some(id)));
-            let is_open = move || !collapsed.with(|s| s.contains(&id));
+            // Bei Suche alles aufgeklappt, was passt
+            let is_open = move || searching || open.with(|o| o.get(&id).copied().unwrap_or(open_by_default(depth)));
             let drag_over = RwSignal::new(false);
             let name = col.name.clone();
             let color = col.color.clone().unwrap_or_default();
@@ -183,11 +287,16 @@ fn tree_level(c: Ctx, collapsed: RwSignal<HashSet<i64>>, parent: Option<i64>, de
                     >
                         <span class="twisty" on:click=move |ev| {
                             ev.stop_propagation();
-                            collapsed.update(|s| { if !s.remove(&id) { s.insert(id); } });
+                            if !searching {
+                                let now = is_open();
+                                open.update(|o| { o.insert(id, !now); });
+                            }
                         }>
                             {move || has_children.then(|| view! { <Icon name=if is_open() { "chevron-down" } else { "chevron-right" } class="sm" /> })}
                         </span>
-                        <span class="dot" style=format!("background:{}", if color.is_empty() { "var(--muted)".to_string() } else { color.clone() })></span>
+                        <span class="coll-icon" style=(!color.is_empty()).then(|| format!("color:{color}"))>
+                            {move || view! { <Icon name=if has_children && is_open() { "folder-open" } else { "folder" } class="sm" /> }}
+                        </span>
                         <span class="grow ellipsis">{name.clone()}</span>
                         {col.ai_locked.then(|| view! {
                             <span class="ai-lock" title="Für den KI-Zugang (MCP) gesperrt – samt Untersammlungen"><Icon name="lock" class="sm" /></span>
@@ -209,7 +318,10 @@ fn tree_level(c: Ctx, collapsed: RwSignal<HashSet<i64>>, parent: Option<i64>, de
                             }><Icon name="pencil" class="sm" /></button>
                         </span>
                     </div>
-                    {move || (has_children && is_open()).then(|| tree_level(c, collapsed, Some(id), depth + 1))}
+                    {
+                        let visible = visible.clone();
+                        move || (has_children && is_open()).then(|| tree_level(c, open, visible.clone(), Some(id), depth + 1))
+                    }
                 </div>
             }
         })
