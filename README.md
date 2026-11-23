@@ -13,7 +13,7 @@ genauso wie Word-, Excel- oder Markdown-Dateien. Komplett in **Rust**:
 Webseite und Desktop-Client sind derselbe Code: Der Desktop-Client lädt die
 gleiche WebAssembly-Oberfläche und spricht dieselbe API an. Unterschiede gibt es
 nur dort, wo es nötig ist (frei wählbare Server-Adresse, Dateien öffnen mit dem
-Standardprogramm des Systems, Sammlungen als Laufwerk – `crates/vfs`).
+Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crates/vfs`).
 
 ## Funktionen
 
@@ -326,12 +326,26 @@ Aktualisiert wird im selben Format, in dem die App installiert wurde
 Linux nach dem Administrator-Passwort). Die App-Version kommt beim Release
 aus dem Git-Tag.
 
-### Sammlungen als Laufwerk
+### Sammlungen im Dateimanager
 
-Unter *Einstellungen → Laufwerk* bindet der Desktop-Client die Sammlungen als
-Ordner ins System ein – unter Linux standardmäßig nach `~/Büro`, unter Windows
-als Laufwerk `B:` (oder der nächste freie Buchstabe). Danach wird es bei jedem
-Start automatisch eingebunden, bis man es wieder aushängt.
+In den Einstellungen bindet der Desktop-Client die Sammlungen in den
+Dateimanager ein. Danach geschieht das bei jedem Start automatisch, bis man es
+wieder trennt bzw. aushängt.
+
+- **Windows – Sync-Ordner (Standard):** wie OneDrive oder Nextcloud ein echter
+  Ordner (vorgeschlagen `C:\Users\<Name>\Büro`, muss neu oder leer sein) mit
+  eigenem Eintrag links im Explorer. Dokumente liegen dort als Platzhalter und
+  werden erst beim Öffnen geladen; Symbole zeigen, was nur online, was lokal
+  vorhanden ist. Per Rechtsklick „Immer auf diesem Gerät behalten“ (auch ohne
+  Verbindung nutzbar) bzw. „Speicherplatz freigeben“. Braucht kein
+  Zusatzprogramm (Windows 10 ab 1709). Änderungen werden im Hintergrund
+  abgeglichen – nach lokalen Änderungen sofort, sonst alle 20 Sekunden.
+  Probleme (z. B. Konflikte) zeigen die Einstellungen an.
+- **Windows – Laufwerk:** alternativ als eigener Laufwerksbuchstabe `B:` (oder
+  der nächste freie) über [WinFsp](https://winfsp.dev/rel/).
+- **Linux:** als Ordner, standardmäßig `~/Büro` (FUSE).
+
+Für beide Arten gilt:
 
 - Jede Sammlung ist ein Ordner, Untersammlungen sind Unterordner. Dokumente ohne
   Sammlung liegen im Ordner `Eingang`. Liegt ein Dokument in mehreren
@@ -353,13 +367,19 @@ Start automatisch eingebunden, bis man es wieder aushängt.
   Speichern aus Word, Excel, LibreOffice & Co. direkt im Laufwerk.
 - Änderungen am Server (z. B. über die Weboberfläche) erscheinen nach wenigen
   Sekunden.
+- Sync-Ordner: Wurde ein Dokument gleichzeitig hier und anderswo geändert,
+  bleiben beide Fassungen erhalten – die eigene als „… (Konflikt)“ daneben.
+  Gelöschtes wird erst übertragen, wenn es auch beim nächsten Abgleich noch
+  fehlt; fehlt fast alles auf einmal, wird zur Sicherheit nichts am Server
+  gelöscht. Nach dem Trennen bleiben geladene Dateien nutzbar.
 
 Voraussetzungen:
 
 - **Linux:** FUSE 3 (Paket `fuse3`, bei den gängigen Distributionen
   vorinstalliert).
-- **Windows:** [WinFsp](https://winfsp.dev/rel/) einmalig installieren. Fehlt
-  es, zeigt Büro in den Einstellungen einen Link zum Herunterladen.
+- **Windows, Sync-Ordner:** Windows 10 (1709) oder neuer, NTFS-Laufwerk.
+- **Windows, Laufwerk:** [WinFsp](https://winfsp.dev/rel/) einmalig installieren.
+  Fehlt es, zeigt Büro in den Einstellungen einen Link zum Herunterladen.
 
 Lokal bauen:
 

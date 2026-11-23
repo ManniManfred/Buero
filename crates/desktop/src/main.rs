@@ -6,8 +6,9 @@
 //! Der Desktop-Client verwendet exakt dieselbe Oberfläche wie die Webseite
 //! (Rust/Leptos, nach WebAssembly kompiliert) und spricht dieselbe HTTP-API an.
 //! Unterschiede: Server-Adresse ist frei wählbar, Dateien werden mit dem
-//! Standardprogramm des Systems geöffnet, und die Sammlungen lassen sich als
-//! Laufwerk ins System einbinden (Linux: FUSE, Windows: WinFsp).
+//! Standardprogramm des Systems geöffnet, und die Sammlungen lassen sich in
+//! den Dateimanager einbinden (Windows: Sync-Ordner wie OneDrive oder Laufwerk
+//! über WinFsp, Linux: FUSE).
 //!
 //! Updates kommen vom eigenen Büro-Server (`/api/desktop/update`), damit die
 //! App zur Version des Servers passt. Installiert wird nur, was mit dem
@@ -29,6 +30,20 @@ struct DriveSettings {
     /// Beim Start automatisch einbinden
     enabled: bool,
     mount_point: Option<String>,
+    /// „sync“ oder „drive“ (fehlt bei älteren Einstellungen: Laufwerk)
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+impl DriveSettings {
+    fn mode(&self) -> buero_vfs::Mode {
+        match self.mode.as_deref().and_then(buero_vfs::Mode::parse) {
+            Some(m) => m,
+            // Wer schon ein Laufwerk eingerichtet hat, behält es; sonst die Empfehlung
+            None if self.enabled || self.mount_point.is_some() => buero_vfs::Mode::Drive,
+            None => buero_vfs::modes().first().copied().unwrap_or(buero_vfs::Mode::Drive),
+        }
+    }
 }
 
 struct Mounted {
@@ -45,12 +60,24 @@ struct DriveState {
 }
 
 #[derive(Serialize)]
+struct ModeInfo {
+    id: &'static str,
+    /// Vorgeschlagener Ort
+    default_path: String,
+    /// Fehlende Systemvoraussetzung, sonst `None`
+    unavailable: Option<String>,
+}
+
+#[derive(Serialize)]
 struct DriveStatus {
     supported: bool,
-    /// Fehlende Systemvoraussetzung (FUSE/WinFsp), sonst `None`
+    /// Fehlende Systemvoraussetzung (FUSE/WinFsp) der gewählten Art, sonst `None`
     unavailable: Option<String>,
     enabled: bool,
     mounted: bool,
+    /// Gewählte bzw. eingebundene Art („sync“ / „drive“)
+    mode: String,
+    modes: Vec<ModeInfo>,
     mount_point: String,
     last_error: Option<String>,
 }
@@ -77,15 +104,29 @@ fn save_settings(app: &tauri::AppHandle, s: &DriveSettings) -> Result<(), String
 fn status(app: &tauri::AppHandle, st: &DriveState) -> DriveStatus {
     let s = load_settings(app);
     let m = st.mounted.lock().unwrap_or_else(|e| e.into_inner());
+    let mode = m.as_ref().map(|m| m.drive.mode()).unwrap_or_else(|| s.mode());
     let mount_point = match &*m {
         Some(m) => m.drive.mount_point().display().to_string(),
-        None => s.mount_point.clone().unwrap_or_else(|| buero_vfs::default_mount_point().display().to_string()),
+        None => s
+            .mount_point
+            .clone()
+            .filter(|_| s.mode() == mode)
+            .unwrap_or_else(|| buero_vfs::default_mount_point(mode).display().to_string()),
     };
     DriveStatus {
         supported: buero_vfs::SUPPORTED,
-        unavailable: buero_vfs::check_available().err(),
+        unavailable: buero_vfs::check_available(mode).err(),
         enabled: s.enabled,
         mounted: m.is_some(),
+        mode: mode.as_str().into(),
+        modes: buero_vfs::modes()
+            .into_iter()
+            .map(|md| ModeInfo {
+                id: md.as_str(),
+                default_path: buero_vfs::default_mount_point(md).display().to_string(),
+                unavailable: buero_vfs::check_available(md).err(),
+            })
+            .collect(),
         mount_point,
         last_error: m.as_ref().and_then(|m| m.drive.last_error()),
     }
@@ -101,15 +142,16 @@ async fn do_mount(
     st: &DriveState,
     server: String,
     token: Option<String>,
+    mode: buero_vfs::Mode,
     mount_point: Option<String>,
 ) -> Result<(), String> {
     unmount_now(st);
     let mp = mount_point
         .filter(|m| !m.trim().is_empty())
         .map(|m| PathBuf::from(m.trim()))
-        .unwrap_or_else(buero_vfs::default_mount_point);
+        .unwrap_or_else(|| buero_vfs::default_mount_point(mode));
     let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("laufwerk");
-    let opts = buero_vfs::Options { server: server.clone(), token: token.clone(), mount_point: mp, cache_dir };
+    let opts = buero_vfs::Options { server: server.clone(), token: token.clone(), mode, mount_point: mp, cache_dir };
     let drive = tauri::async_runtime::spawn_blocking(move || buero_vfs::mount(opts))
         .await
         .map_err(|e| e.to_string())??;
@@ -129,17 +171,22 @@ async fn drive_mount(
     st: State<'_, DriveState>,
     server: String,
     token: Option<String>,
+    mode: Option<String>,
     mount_point: Option<String>,
 ) -> Result<DriveStatus, String> {
     let _busy = st.busy.lock().await;
-    do_mount(&app, &st, server, token, mount_point.clone()).await?;
+    let mode = mode.as_deref().and_then(buero_vfs::Mode::parse).unwrap_or_else(|| load_settings(&app).mode());
+    do_mount(&app, &st, server, token, mode, mount_point.clone()).await?;
     let actual = st
         .mounted
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .map(|m| m.drive.mount_point().display().to_string());
-    save_settings(&app, &DriveSettings { enabled: true, mount_point: actual.or(mount_point) })?;
+    save_settings(
+        &app,
+        &DriveSettings { enabled: true, mount_point: actual.or(mount_point), mode: Some(mode.as_str().into()) },
+    )?;
     Ok(status(&app, &st))
 }
 
@@ -176,8 +223,9 @@ async fn drive_sync(
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .map(|m| (m.server.clone(), m.token.clone()));
-    if s.enabled && current != Some((server.clone(), token.clone())) && buero_vfs::check_available().is_ok() {
-        do_mount(&app, &st, server, token, s.mount_point).await?;
+    let mode = s.mode();
+    if s.enabled && current != Some((server.clone(), token.clone())) && buero_vfs::check_available(mode).is_ok() {
+        do_mount(&app, &st, server, token, mode, s.mount_point).await?;
     }
     Ok(status(&app, &st))
 }
@@ -191,7 +239,7 @@ fn drive_open(app: tauri::AppHandle, st: State<'_, DriveState>) -> Result<(), St
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .map(|m| m.drive.mount_point().to_path_buf())
-        .ok_or("Laufwerk ist nicht eingebunden")?;
+        .ok_or("Nicht eingebunden")?;
     let mut p = mp.display().to_string();
     // „B:“ allein wäre das aktuelle Verzeichnis auf B:
     if p.len() == 2 && p.ends_with(':') {

@@ -44,7 +44,7 @@ pub enum Dir {
 }
 
 impl Dir {
-    fn collection(self) -> Option<i64> {
+    pub(crate) fn collection(self) -> Option<i64> {
         match self {
             Dir::Coll(c) => Some(c),
             _ => None,
@@ -138,13 +138,13 @@ pub fn sanitize_name(name: &str) -> String {
     }
 }
 
-fn extension(filename: &str) -> Option<&str> {
+pub(crate) fn extension(filename: &str) -> Option<&str> {
     let (stem, ext) = filename.rsplit_once('.')?;
     (!stem.is_empty() && !ext.is_empty() && ext.len() <= 10 && !ext.contains(' ')).then_some(ext)
 }
 
 /// Dateiname eines Dokuments: Titel + Endung der Originaldatei
-fn doc_file_name(d: &DocumentSummary) -> String {
+pub(crate) fn doc_file_name(d: &DocumentSummary) -> String {
     let title = d.title.trim();
     let base = if title.is_empty() { d.original_filename.as_str() } else { title };
     let mut name = sanitize_name(base);
@@ -158,7 +158,7 @@ fn doc_file_name(d: &DocumentSummary) -> String {
 }
 
 /// Titel aus einem neuen Dateinamen (Endung der Originaldatei abschneiden)
-fn title_from_name(name: &str, original_filename: &str) -> String {
+pub(crate) fn title_from_name(name: &str, original_filename: &str) -> String {
     if let Some(ext) = extension(original_filename) {
         let suffix = format!(".{}", ext.to_lowercase());
         if name.to_lowercase().ends_with(&suffix) && name.len() > suffix.len() {
@@ -168,14 +168,14 @@ fn title_from_name(name: &str, original_filename: &str) -> String {
     name.to_string()
 }
 
-fn stem(name: &str) -> &str {
+pub(crate) fn stem(name: &str) -> &str {
     match extension(name) {
         Some(ext) => &name[..name.len() - ext.len() - 1],
         None => name,
     }
 }
 
-fn with_suffix(name: &str, suffix: &str) -> String {
+pub(crate) fn with_suffix(name: &str, suffix: &str) -> String {
     match extension(name) {
         Some(ext) => format!("{} ({suffix}).{ext}", stem(name)),
         None => format!("{name} ({suffix})"),
@@ -187,21 +187,21 @@ fn ts(secs: i64) -> SystemTime {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum Entry {
+pub(crate) enum Entry {
     Dir(Dir),
     Doc(i64),
 }
 
 /// Geladener Stand vom Server, als Ordnerbaum aufbereitet
 #[derive(Default)]
-struct Snapshot {
-    colls: HashMap<i64, Collection>,
-    docs: HashMap<i64, DocumentSummary>,
-    entries: HashMap<Dir, Vec<(String, Entry)>>,
+pub(crate) struct Snapshot {
+    pub(crate) colls: HashMap<i64, Collection>,
+    pub(crate) docs: HashMap<i64, DocumentSummary>,
+    pub(crate) entries: HashMap<Dir, Vec<(String, Entry)>>,
 }
 
 impl Snapshot {
-    fn build(colls: Vec<Collection>, docs: Vec<DocumentSummary>) -> Self {
+    pub(crate) fn build(colls: Vec<Collection>, docs: Vec<DocumentSummary>) -> Self {
         let colls: HashMap<i64, Collection> = colls.into_iter().map(|c| (c.id, c)).collect();
         let mut entries: HashMap<Dir, Vec<(String, Entry)>> = HashMap::new();
         entries.insert(Dir::Root, vec![(INBOX_NAME.to_string(), Entry::Dir(Dir::Inbox))]);

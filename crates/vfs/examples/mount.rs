@@ -27,6 +27,7 @@ fn main() {
     let drive = buero_vfs::mount(buero_vfs::Options {
         server: server.clone(),
         token: (token != "-").then(|| token.clone()),
+        mode: buero_vfs::Mode::Drive,
         mount_point: mp.into(),
         cache_dir: std::env::temp_dir().join("buero-vfs-test"),
     })
