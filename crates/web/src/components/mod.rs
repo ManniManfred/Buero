@@ -5,6 +5,7 @@ pub mod dashboard;
 pub mod desktop;
 pub mod detail;
 pub mod drive;
+pub mod editor;
 pub mod email;
 pub mod links;
 pub mod mail;

@@ -269,6 +269,7 @@ h1 .ico.brand-logo { width: 28px; height: 28px; }
 .kind-image { color: #9333ea; }
 .kind-email { color: #0891b2; }
 .kind-text { color: #64748b; }
+.kind-markdown { color: #0f766e; }
 
 /* Freigaben */
 .share-dialog { width: min(620px, 94vw); }
@@ -666,3 +667,42 @@ button.danger-solid:hover { filter: brightness(1.08); border-color: var(--danger
 .pill.ok { color: #1a7f37; border-color: #1a7f37; }
 .folder-add { display: flex; flex-direction: column; gap: 8px; }
 .folder-add button { align-self: flex-start; }
+
+/* Text- und Markdown-Editor */
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.segmented button { border: none; border-radius: 0; padding: 5px 10px; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.editor-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; }
+.editor-body.split { grid-template-columns: 1fr 1fr; }
+.editor-text {
+  width: 100%; height: 100%; box-sizing: border-box; resize: none; border: none; border-radius: 0;
+  padding: 16px 20px; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  tab-size: 4; background: var(--panel); color: var(--text);
+}
+.editor-text:focus { outline: none; }
+.editor-body.split .editor-text { border-right: 1px solid var(--border); }
+.editor-preview { overflow: auto; padding: 16px 28px; min-height: 0; }
+.preview.md-view { overflow: auto; padding: 12px 18px; box-sizing: border-box; background: var(--panel); }
+@media (max-width: 760px) {
+  .editor-body.split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  .editor-body.split .editor-text { border-right: none; border-bottom: 1px solid var(--border); }
+}
+
+/* Gerendertes Markdown */
+.markdown { line-height: 1.6; word-wrap: break-word; }
+.markdown > :first-child { margin-top: 0; }
+.markdown h1, .markdown h2 { border-bottom: 1px solid var(--border); padding-bottom: .25em; }
+.markdown h1 { font-size: 1.7em; } .markdown h2 { font-size: 1.35em; } .markdown h3 { font-size: 1.15em; }
+.markdown a { color: var(--accent); }
+.markdown code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; background: var(--bg); padding: .1em .35em; border-radius: 4px; }
+.markdown pre { background: var(--bg); padding: 10px 12px; border-radius: var(--radius); overflow: auto; }
+.markdown pre code { background: none; padding: 0; }
+.markdown blockquote { margin: 0; padding: 0 1em; color: var(--muted); border-left: 3px solid var(--border); }
+.markdown table { border-collapse: collapse; margin: .5em 0; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 4px 10px; }
+.markdown th { background: var(--bg); }
+.markdown img { max-width: 100%; }
+.markdown ul.contains-task-list, .markdown li:has(> input[type=checkbox]) { list-style: none; }
+.markdown li > input[type=checkbox] { margin-right: .4em; }
+.markdown hr { border: none; border-top: 1px solid var(--border); }

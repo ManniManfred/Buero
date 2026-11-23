@@ -20,6 +20,18 @@ Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crat
 - **Upload** per Drag & Drop (ins ganze Fenster) oder Dateiauswahl, mehrere
   Dateien parallel. Ist links eine Sammlung gewählt, landen Uploads direkt darin.
   Doppelte Dateien werden am SHA-256-Hash erkannt und nicht doppelt gespeichert.
+- **Neue Dokumente** (Knopf „Neu“): leeres Word-Dokument, Excel-Tabelle,
+  PowerPoint-Präsentation (16:9), Textdatei oder Markdown-Datei anlegen – in der
+  links gewählten Sammlung, sonst im Eingang. Office-Dateien öffnen sich danach
+  in Euro-Office (falls eingerichtet), Text und Markdown im eingebauten Editor.
+  Mit Tupfer Designer auch ein neues Tupfer-Projekt (wird beim ersten Speichern
+  im Eingang angelegt).
+- **Text- und Markdown-Editor**: Textdateien (`.txt`, `.csv`, `.json`, …) und
+  Markdown direkt in der Oberfläche bearbeiten („Bearbeiten“ in der
+  Detailansicht). Markdown mit Vorschau daneben (Tabellen, Aufgabenlisten,
+  Fußnoten). „Speichern“ bzw. Strg+S legt eine neue Version an; hat inzwischen
+  jemand anderes gespeichert, wird nachgefragt. Markdown-Dateien erscheinen in
+  der Detailansicht formatiert und haben einen eigenen Dateiart-Filter.
 - **Scannen mit der Handy-Kamera** direkt im Browser (Knopf „Scannen“, Kamera-Symbol):
   mehrere Seiten nacheinander aufnehmen, Blattränder werden automatisch erkannt
   und lassen sich mit Lupe von Hand nachziehen; die Seiten werden perspektivisch

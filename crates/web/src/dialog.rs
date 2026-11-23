@@ -291,7 +291,7 @@ fn DialogView(d: Dialog, sig: RwSignal<Option<Dialog>>) -> impl IntoView {
                     view! {
                         <button type="button" node_ref=node class:danger=ch.danger
                             on:click=move |_| close(Some(Answer { value: key.clone(), checked: false }))>
-                            <Icon name=ch.icon />{ch.label}
+                            <span class=format!("kind-{}", ch.icon)><Icon name=ch.icon /></span>{ch.label}
                         </button>
                     }
                 }).collect_view()}

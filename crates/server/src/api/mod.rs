@@ -32,6 +32,7 @@ pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/documents", get(documents::list).post(documents::upload))
         .route("/api/documents/bulk", post(documents::bulk))
+        .route("/api/documents/new", post(documents::create_blank))
         .route(
             "/api/documents/{id}",
             get(documents::get).patch(documents::update).delete(documents::delete),

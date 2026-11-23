@@ -25,7 +25,7 @@ use tantivy::tokenizer::{
 };
 use tantivy::{DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term};
 
-const SCHEMA_VERSION: &str = "6";
+const SCHEMA_VERSION: &str = "7";
 const TOKENIZER: &str = "de_stem";
 
 #[derive(Clone, Copy)]

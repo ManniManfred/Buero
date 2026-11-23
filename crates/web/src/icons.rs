@@ -19,6 +19,9 @@ fn body(name: &str) -> String {
         "chevron-right" => r#"<path d="m9 18 6-6-6-6"/>"#,
         "chevron-down" => r#"<path d="m6 9 6 6 6-6"/>"#,
         "plus" => r#"<path d="M5 12h14"/><path d="M12 5v14"/>"#,
+        "file-plus" => r#"<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>"#,
+        "save" => r#"<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>"#,
+        "tupfer" => r#"<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor"/>"#,
         "pencil" => r#"<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>"#,
         "minimize" => r#"<path d="M5 12h14"/>"#,
         "maximize" => r#"<rect width="14" height="14" x="5" y="5" rx="1"/>"#,
@@ -43,6 +46,7 @@ fn body(name: &str) -> String {
         "alert" => r#"<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>"#,
         // Dateiarten
         "pdf" | "text" => return format!(r#"{FILE}<path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>"#),
+        "markdown" => return format!(r#"{FILE}<path d="M8 18v-5l2 2 2-2v5"/><path d="M15 13v5"/><path d="m13.5 16.5 1.5 1.5 1.5-1.5"/>"#),
         "word" => return format!(r#"{FILE}<path d="m8 12 1.2 6 1.8-4 1.8 4 1.2-6"/>"#),
         "spreadsheet" => return format!(r#"{FILE}<path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/>"#),
         "presentation" => r#"<path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="m7 21 5-5 5 5"/>"#,

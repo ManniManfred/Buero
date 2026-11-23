@@ -16,6 +16,7 @@ mod security;
 mod sign;
 mod state;
 mod storage;
+mod templates;
 mod util;
 mod worker;
 

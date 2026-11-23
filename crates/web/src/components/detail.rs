@@ -136,6 +136,7 @@ fn DetailBody(
     let date = RwSignal::new(s.document_date.clone().unwrap_or_default());
     let description = RwSignal::new(d.description.clone());
 
+    let version = s.version;
     let preview = {
         let file_url = file_url.clone();
         let kind = kind.clone();
@@ -165,6 +166,8 @@ fn DetailBody(
                                     on:play=move |_| crate::player::pause()></video>
                             </div>
                         }.into_any()
+                    } else if kind == "markdown" {
+                        view! { <crate::components::editor::MarkdownView id=id version=version /> }.into_any()
                     } else if previewable {
                         view! { <iframe class="preview" src=file_url.clone()></iframe> }.into_any()
                     } else {
@@ -200,6 +203,14 @@ fn DetailBody(
             </button>
         })
     };
+    let text_btn = {
+        let can = crate::components::editor::editable(&s);
+        move || can.then(|| view! {
+            <button class="primary" title="Im Editor bearbeiten" on:click=move |_| c.text_doc.set(Some(id))>
+                <Icon name="file-pen" />"Bearbeiten"
+            </button>
+        })
+    };
     let share_name = s.title.clone();
     let status = status_label(&s.extract_status);
 
@@ -213,6 +224,7 @@ fn DetailBody(
         <div class="actions">
             {office_btn}
             {tupfer_btn}
+            {text_btn}
             <button on:click=move |_| open_external(&open_url)><Icon name="external" />"Öffnen"</button>
             <button on:click=move |_| open_external(&download_url)><Icon name="download" />"Herunterladen"</button>
             <button title="Bearbeitete Datei als neue Version hochladen"

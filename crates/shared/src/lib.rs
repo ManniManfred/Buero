@@ -12,7 +12,8 @@ pub const KINDS: &[(&str, &str)] = &[
     ("word", "Textdokumente"),
     ("spreadsheet", "Tabellen"),
     ("presentation", "Präsentationen"),
-    ("text", "Text / Markdown"),
+    ("text", "Text"),
+    ("markdown", "Markdown"),
     ("email", "E-Mails"),
     ("audio", "Audio"),
     ("video", "Videos"),
@@ -26,7 +27,8 @@ pub fn kind_for(extension: &str, mime: &str) -> &'static str {
         "doc" | "docx" | "odt" | "rtf" | "pages" => "word",
         "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" | "csv" | "numbers" => "spreadsheet",
         "ppt" | "pptx" | "odp" | "key" => "presentation",
-        "md" | "markdown" | "txt" | "text" | "log" | "json" | "xml" | "html" | "htm" | "yaml"
+        "md" | "markdown" | "mdown" | "mkd" => "markdown",
+        "txt" | "text" | "log" | "json" | "xml" | "html" | "htm" | "yaml"
         | "yml" | "toml" | "ini" | "rs" | "py" | "js" | "ts" | "sh" => "text",
         "eml" | "msg" => "email",
         // `.mpeg` ist in der Praxis meist MP3-Audio (Messenger, Diktiergeräte)
@@ -39,6 +41,8 @@ pub fn kind_for(extension: &str, mime: &str) -> &'static str {
                 "audio"
             } else if mime.starts_with("video/") {
                 "video"
+            } else if mime == "text/markdown" {
+                "markdown"
             } else if mime.starts_with("text/") {
                 "text"
             } else {

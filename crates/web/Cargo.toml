@@ -20,5 +20,6 @@ console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = [
   "Window", "Document", "Location", "Storage", "File", "FileList", "FormData",
   "DataTransfer", "DragEvent", "HtmlInputElement", "HtmlSelectElement", "KeyboardEvent",
-  "Blob", "Element", "Navigator", "DomRect", "HtmlAudioElement", "HtmlMediaElement",
+  "Blob", "BlobPropertyBag", "HtmlTextAreaElement", "Element", "Navigator", "DomRect", "HtmlAudioElement", "HtmlMediaElement",
 ] }
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }

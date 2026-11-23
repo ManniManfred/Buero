@@ -70,6 +70,10 @@ pub struct Ctx {
     pub office_doc: RwSignal<Option<i64>>,
     /// Dokument, das gerade im Tupfer Designer geöffnet ist
     pub tupfer_doc: RwSignal<Option<i64>>,
+    /// Dokument, das gerade im Text-/Markdown-Editor geöffnet ist
+    pub text_doc: RwSignal<Option<i64>>,
+    /// Titel für Editoren, wenn das Dokument (noch) nicht in der Liste steht
+    pub editor_title: RwSignal<String>,
     /// Dokumentenscanner (Kamera) geöffnet
     pub scan: RwSignal<bool>,
 }
@@ -110,6 +114,8 @@ impl Ctx {
             share_target: RwSignal::new(None),
             office_doc: RwSignal::new(None),
             tupfer_doc: RwSignal::new(None),
+            text_doc: RwSignal::new(None),
+            editor_title: RwSignal::new(String::new()),
             scan: RwSignal::new(false),
         }
     }

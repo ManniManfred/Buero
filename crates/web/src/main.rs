@@ -9,6 +9,7 @@ mod dialog;
 mod player;
 mod icons;
 mod js;
+mod markdown;
 mod state;
 mod util;
 
@@ -318,12 +319,15 @@ fn Main() -> impl IntoView {
         </Show>
         {move || c.share_target.get().map(|t| view! { <components::share::ShareDialog target=t /> })}
         {move || c.office_doc.get().map(|id| {
-            let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone())).unwrap_or_default();
+            let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone()))
+                .unwrap_or_else(|| c.editor_title.get_untracked());
             view! { <components::office::OfficeEditor id=id title=title /> }
         })}
         {move || c.tupfer_doc.get().map(|id| {
-            let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone())).unwrap_or_default();
+            let title = c.results.with_untracked(|r| r.iter().find(|d| d.id == id).map(|d| d.title.clone()))
+                .unwrap_or_else(|| c.editor_title.get_untracked());
             view! { <components::tupfer::TupferEditor id=id title=title /> }
         })}
+        {move || c.text_doc.get().map(|id| view! { <components::editor::TextEditor id=id /> })}
     }
 }

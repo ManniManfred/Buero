@@ -119,6 +119,8 @@ pub(crate) struct UploadForm {
     /// und Tags zuordnen. Für Uploads über Freigabelinks abgeschaltet, damit
     /// Fremde keine bestehenden Dokumente in die freigegebene Sammlung holen.
     pub link_duplicates: bool,
+    /// Gleichen Inhalt nicht als Duplikat erkennen (neue, leere Dokumente)
+    pub always_new: bool,
 }
 
 /// Multipart-Formular lesen: beliebig viele Felder `file`, optional
@@ -178,17 +180,19 @@ pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<
 
 /// Gestagte Dateien als Dokumente anlegen (Duplikate werden erkannt).
 pub(crate) async fn store_uploads(st: &AppState, form: UploadForm) -> AppResult<Vec<UploadResult>> {
-    let UploadForm { uploads, collections, tags, title, date, link_duplicates, .. } = form;
+    let UploadForm { uploads, collections, tags, title, date, link_duplicates, always_new, .. } = form;
     let single = uploads.len() == 1;
     let mut results = Vec::with_capacity(uploads.len());
     let mut touched = Vec::new();
     for u in uploads {
-        let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT document_id FROM document_versions WHERE sha256 = ? ORDER BY id LIMIT 1",
-        )
-        .bind(&u.staged.sha256)
-        .fetch_optional(&st.pool)
-        .await?;
+        let existing: Option<i64> = if always_new {
+            None
+        } else {
+            sqlx::query_scalar("SELECT document_id FROM document_versions WHERE sha256 = ? ORDER BY id LIMIT 1")
+                .bind(&u.staged.sha256)
+                .fetch_optional(&st.pool)
+                .await?
+        };
 
         let (id, duplicate) = if let Some(id) = existing {
             st.storage.discard(&u.staged).await;
@@ -261,6 +265,49 @@ pub(crate) async fn store_uploads(st: &AppState, form: UploadForm) -> AppResult<
                 .map(|s| UploadResult { document: s.clone(), duplicate })
         })
         .collect())
+}
+
+#[derive(Deserialize)]
+pub struct NewDocument {
+    /// word | spreadsheet | presentation | text | markdown
+    kind: String,
+    title: String,
+    #[serde(default)]
+    collection_ids: Vec<i64>,
+}
+
+/// Neues, leeres Dokument anlegen (Word, Excel, PowerPoint, Text, Markdown)
+pub async fn create_blank(State(st): State<AppState>, Json(n): Json<NewDocument>) -> AppResult<Json<DocumentSummary>> {
+    let mut title = n.title.trim().to_string();
+    let ext = crate::templates::NEW_TYPES
+        .iter()
+        .find(|(k, _, _)| *k == n.kind)
+        .map(|(_, e, _)| *e)
+        .ok_or_else(|| AppError::bad_request("Unbekannte Dokumentart"))?;
+    // „Notizen.md“ eingetippt: Endung nicht doppelt
+    if title.to_lowercase().ends_with(&format!(".{ext}")) {
+        title.truncate(title.len() - ext.len() - 1);
+        title = title.trim().to_string();
+    }
+    if title.is_empty() {
+        return Err(AppError::bad_request("Bitte einen Namen angeben"));
+    }
+    let (_, bytes) = crate::templates::blank(&n.kind, &title).ok_or_else(|| AppError::bad_request("Unbekannte Dokumentart"))?;
+    let safe: String = title.chars().map(|c| if r#"/\:*?"<>|"#.contains(c) { '_' } else { c }).collect();
+    let filename = sanitize_filename(&format!("{safe}.{ext}"));
+    let mime = guess_mime(&filename, None);
+    let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(axum::body::Bytes::from(bytes))]);
+    let staged = st.storage.stage(stream, usize::MAX).await.map_err(|e| AppError::bad_request(e.to_string()))?;
+    let form = UploadForm {
+        uploads: vec![Upload { staged, filename, mime }],
+        collections: n.collection_ids,
+        title: Some(title),
+        link_duplicates: true,
+        always_new: true,
+        ..Default::default()
+    };
+    let r = store_uploads(&st, form).await?;
+    r.into_iter().next().map(|u| Json(u.document)).ok_or_else(AppError::not_found)
 }
 
 pub(crate) fn sanitize_filename(name: &str) -> String {
