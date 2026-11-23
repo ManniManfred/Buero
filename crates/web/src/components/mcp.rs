@@ -35,17 +35,17 @@ pub fn McpSection() -> impl IntoView {
     let locked = move || c.collections.with(|cs| cs.iter().filter(|x| x.ai_locked).map(|x| x.name.clone()).collect::<Vec<_>>());
 
     let create = move |_| {
-        let Some(name) = window()
-            .prompt_with_message_and_default("Name für den Zugang (z. B. „Claude Code Laptop“):", "Claude Code")
-            .ok()
-            .flatten()
-        else {
-            return;
-        };
-        let can_upload = window()
-            .confirm_with_message("Darf dieser Zugang auch Dokumente hochladen, Tags vergeben und in Sammlungen einordnen?\n(Löschen oder Ändern geht nie.) OK = ja, Abbrechen = nur lesen")
-            .unwrap_or(false);
         spawn_local(async move {
+            let Some(a) = crate::dialog::prompt("Neuer Zugangsschlüssel", "Name, z. B. „Claude Code Laptop“")
+                .value("Claude Code")
+                .check("Darf auch hochladen, Tags vergeben, einordnen und fehlende Daten eintragen (nie löschen oder ändern)", false)
+                .ok("Anlegen")
+                .ask()
+                .await
+            else {
+                return;
+            };
+            let (name, can_upload) = (a.value.trim().to_string(), a.checked);
             match c.api.send::<_, ApiTokenCreated>("POST", "/api/mcp/tokens", &ApiTokenInput { name, can_upload }).await {
                 Ok(t) => {
                     created.set(Some(t));
@@ -57,13 +57,15 @@ pub fn McpSection() -> impl IntoView {
     };
 
     let revoke = move |t: ApiToken| {
-        if !window()
-            .confirm_with_message(&format!("Zugang „{}“ widerrufen? Programme mit diesem Schlüssel verlieren sofort den Zugriff.", t.name))
-            .unwrap_or(false)
-        {
-            return;
-        }
         spawn_local(async move {
+            if !crate::dialog::confirm(format!("Zugang „{}“ widerrufen?", t.name), "Programme mit diesem Schlüssel verlieren sofort den Zugriff.")
+                .ok("Widerrufen")
+                .danger()
+                .ask_ok()
+                .await
+            {
+                return;
+            }
             match c.api.send_empty::<()>("DELETE", &format!("/api/mcp/tokens/{}", t.id), None).await {
                 Ok(()) => {
                     if created.with_untracked(|n| n.as_ref().is_some_and(|n| n.info.id == t.id)) {
@@ -133,7 +135,7 @@ pub fn McpSection() -> impl IntoView {
                 <li>
                     <crate::icons::Icon name="lock" class="sm" />
                     <span class="grow">{t.name.clone()}</span>
-                    <label class="muted" title="Darf Dokumente hochladen, Tags vergeben und in Sammlungen einordnen">
+                    <label class="muted token-perm" title="Darf Dokumente hochladen, Tags vergeben und in Sammlungen einordnen">
                         <input type="checkbox" prop:checked=t.can_upload on:change={
                             let t = t.clone();
                             move |ev| set_upload(t.clone(), event_target_checked(&ev))

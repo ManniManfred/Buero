@@ -216,14 +216,19 @@ fn DetailBody(
                 });
             } />
             <button class="danger" title="Löschen" on:click=move |_| {
-                if window().confirm_with_message("Dokument inkl. aller Versionen endgültig löschen?").unwrap_or(false) {
-                    spawn_local(async move {
+                spawn_local(async move {
+                    if crate::dialog::confirm("Dokument löschen?", "Das Dokument wird samt aller Versionen endgültig gelöscht.")
+                        .ok("Löschen")
+                        .danger()
+                        .ask_ok()
+                        .await
+                    {
                         match c.api.send_empty::<()>("DELETE", &format!("/api/documents/{id}"), None).await {
                             Ok(()) => { c.selected.set(None); c.load_meta(); c.reload(); }
                             Err(e) => c.notify(e, true),
                         }
-                    });
-                }
+                    }
+                });
             }><Icon name="trash" /></button>
         </div>
         {(!status.is_empty()).then(|| view! {

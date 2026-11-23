@@ -53,12 +53,15 @@ pub fn TupferEditor(id: i64, title: String) -> impl IntoView {
             }
             "status" if asking.get_untracked() > 0 => {
                 asking.set(0);
-                if !modified
-                    || window()
-                        .confirm_with_message("Das Projekt hat ungespeicherte Änderungen. Trotzdem schließen?")
-                        .unwrap_or(false)
-                {
+                if !modified {
                     close_now();
+                } else {
+                    crate::dialog::confirm_then(
+                        crate::dialog::confirm("Ungespeicherte Änderungen", "Das Projekt hat ungespeicherte Änderungen. Trotzdem schließen?")
+                            .ok("Schließen ohne Speichern")
+                            .danger(),
+                        close_now,
+                    );
                 }
             }
             _ => {}

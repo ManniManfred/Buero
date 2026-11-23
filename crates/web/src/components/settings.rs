@@ -99,10 +99,14 @@ pub fn Settings() -> impl IntoView {
                         });
                     }>"Abmelden"</button>
                     <button title="Beendet alle Anmeldungen auf allen Geräten, auch diese" on:click=move |_| {
-                        if !window().confirm_with_message("Auf allen Geräten abmelden? Danach muss man sich überall neu anmelden.").unwrap_or(false) {
-                            return;
-                        }
                         spawn_local(async move {
+                            if !crate::dialog::confirm("Auf allen Geräten abmelden?", "Danach muss man sich überall neu anmelden, auch hier.")
+                                .ok("Überall abmelden")
+                                .ask_ok()
+                                .await
+                            {
+                                return;
+                            }
                             match c.api.send_empty::<()>("POST", "/api/auth/logout-all", None).await {
                                 Ok(()) => {
                                     if is_desktop() {
@@ -148,15 +152,15 @@ fn BackupSection() -> impl IntoView {
         let Some(file) = i.files().and_then(|f| f.get(0)) else { return };
         i.set_value("");
         let msg = format!(
-            "Alle Dokumente, Sammlungen, Schlagwörter und Freigaben werden durch den Stand aus „{}“ ersetzt. \
-             Der bisherige Stand bleibt auf dem Server im Ordner „vor-wiederherstellung“. Fortfahren?",
+            "Alle Dokumente, Sammlungen, Schlagwörter und Freigaben werden durch den Stand aus „{}“ ersetzt.\n\
+             Der bisherige Stand bleibt auf dem Server im Ordner „vor-wiederherstellung“.",
             file.name()
         );
-        if !window().confirm_with_message(&msg).unwrap_or(false) {
-            return;
-        }
-        busy.set(true);
         spawn_local(async move {
+            if !crate::dialog::confirm("Backup einspielen?", msg).ok("Einspielen").danger().ask_ok().await {
+                return;
+            }
+            busy.set(true);
             match c.api.post_file::<shared::RestoreResult>("/api/admin/restore", &file).await {
                 Ok(r) => {
                     let mut m = format!("Backup mit {} Dokument(en) wird eingespielt, der Server startet neu …", r.documents);

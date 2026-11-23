@@ -5,6 +5,7 @@
 
 mod api;
 mod components;
+mod dialog;
 mod icons;
 mod js;
 mod state;
@@ -101,6 +102,7 @@ fn App() -> impl IntoView {
             <components::update::UpdateBanner />
         </Show>
         <Toast />
+        <dialog::DialogHost />
     }
 }
 
@@ -284,7 +286,7 @@ fn Main() -> impl IntoView {
                     i.select();
                 }
             }
-        } else if ev.key() == "Escape" {
+        } else if ev.key() == "Escape" && !crate::dialog::is_open() {
             c.selected.set(None);
         }
     });

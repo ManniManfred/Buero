@@ -156,9 +156,13 @@ fn BulkBar() -> impl IntoView {
                 })}
                 <button class="danger" on:click=move |_| {
                     let n = c.checked.with_untracked(|s| s.len());
-                    if window().confirm_with_message(&format!("{n} Dokument(e) endgültig löschen?")).unwrap_or(false) {
-                        bulk(c, BulkUpdate { ids: ids(), delete: true, ..Default::default() }, "Gelöscht");
-                    }
+                    let what = if n == 1 { "1 Dokument".to_string() } else { format!("{n} Dokumente") };
+                    crate::dialog::confirm_then(
+                        crate::dialog::confirm(format!("{what} löschen?"), "Die Dokumente werden samt aller Versionen endgültig gelöscht.")
+                            .ok("Löschen")
+                            .danger(),
+                        move || bulk(c, BulkUpdate { ids: ids(), delete: true, ..Default::default() }, "Gelöscht"),
+                    );
                 }>"Löschen"</button>
                 <button class="link" on:click=move |_| c.checked.set(Default::default())>"Auswahl aufheben"</button>
             </div>

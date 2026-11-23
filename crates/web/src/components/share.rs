@@ -216,10 +216,15 @@ fn ShareRow(s: Share, shares: RwSignal<Option<Vec<Share>>>, show_target: bool) -
                 <button class="icon" title="Link kopieren" on:click=move |_| copy_link(c, copy_url.clone())><Icon name="copy" /></button>
                 <button class="icon" title="Link öffnen" on:click=move |_| crate::api::open_external(&url)><Icon name="external" /></button>
                 <button class="icon danger" title="Freigabe widerrufen" on:click=move |_| {
-                    if !window().confirm_with_message("Freigabe widerrufen? Der Link funktioniert danach nicht mehr.").unwrap_or(false) {
-                        return;
-                    }
                     spawn_local(async move {
+                        if !crate::dialog::confirm("Freigabe widerrufen?", "Der Link funktioniert danach nicht mehr.")
+                            .ok("Widerrufen")
+                            .danger()
+                            .ask_ok()
+                            .await
+                        {
+                            return;
+                        }
                         match c.api.send_empty::<()>("DELETE", &format!("/api/shares/{id}"), None).await {
                             Ok(()) => shares.update(|v| if let Some(v) = v { v.retain(|x| x.id != id) }),
                             Err(e) => c.notify(e, true),

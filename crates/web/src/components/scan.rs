@@ -615,14 +615,15 @@ pub fn Scanner() -> impl IntoView {
 
     let close = move || {
         let n = pages.with_untracked(|p| p.len());
-        if n > 0
-            && !window()
-                .confirm_with_message(&format!("{n} gescannte Seite(n) verwerfen?"))
-                .unwrap_or(false)
-        {
+        if n == 0 {
+            c.scan.set(false);
             return;
         }
-        c.scan.set(false);
+        let what = if n == 1 { "Die gescannte Seite".to_string() } else { format!("Die {n} gescannten Seiten") };
+        crate::dialog::confirm_then(
+            crate::dialog::confirm("Scan verwerfen?", format!("{what} gehen verloren.")).ok("Verwerfen").danger(),
+            move || c.scan.set(false),
+        );
     };
 
     let capture = move || {
