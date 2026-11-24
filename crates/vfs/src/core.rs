@@ -206,6 +206,10 @@ impl Snapshot {
         let mut entries: HashMap<Dir, Vec<(String, Entry)>> = HashMap::new();
         entries.insert(Dir::Root, vec![(INBOX_NAME.to_string(), Entry::Dir(Dir::Inbox))]);
         entries.insert(Dir::Inbox, Vec::new());
+        // Vergebene Namen je Ordner (klein geschrieben): sonst wird jeder neue
+        // Name mit allen bisherigen verglichen, bei großen Ordnern quadratisch
+        let mut taken: HashMap<Dir, HashSet<String>> = HashMap::new();
+        taken.entry(Dir::Root).or_default().insert(INBOX_NAME.to_lowercase());
 
         let mut sorted: Vec<&Collection> = colls.values().collect();
         sorted.sort_by_key(|c| (c.name.to_lowercase(), c.id));
@@ -217,9 +221,8 @@ impl Snapshot {
                 Some(p) if colls.contains_key(&p) => Dir::Coll(p),
                 _ => Dir::Root,
             };
-            let list = entries.entry(parent).or_default();
-            let name = unique(list, sanitize_name(&c.name), c.id);
-            list.push((name, Entry::Dir(Dir::Coll(c.id))));
+            let name = unique(taken.entry(parent).or_default(), sanitize_name(&c.name), c.id);
+            entries.entry(parent).or_default().push((name, Entry::Dir(Dir::Coll(c.id))));
         }
 
         let mut docs_sorted: Vec<&DocumentSummary> = docs.iter().collect();
@@ -232,25 +235,24 @@ impl Snapshot {
                 d.collection_ids.iter().filter(|c| colls.contains_key(c)).map(|c| Dir::Coll(*c)).collect()
             };
             for dir in dirs {
-                let list = entries.entry(dir).or_default();
-                let n = unique(list, name.clone(), d.id);
-                list.push((n, Entry::Doc(d.id)));
+                let n = unique(taken.entry(dir).or_default(), name.clone(), d.id);
+                entries.entry(dir).or_default().push((n, Entry::Doc(d.id)));
             }
         }
         Snapshot { colls, docs: docs.into_iter().map(|d| (d.id, d)).collect(), entries }
     }
 }
 
-/// Bei Namensgleichheit (ohne Groß-/Kleinschreibung) die ID anhängen
-fn unique(list: &[(String, Entry)], name: String, id: i64) -> String {
-    let taken = |n: &str| list.iter().any(|(m, _)| m.to_lowercase() == n.to_lowercase());
-    if !taken(&name) {
-        return name;
-    }
-    let mut candidate = with_suffix(&name, &id.to_string());
-    let mut i = 2;
-    while taken(&candidate) {
-        candidate = with_suffix(&name, &format!("{id}-{i}"));
+/// Bei Namensgleichheit (ohne Groß-/Kleinschreibung) die ID anhängen. Der
+/// gewählte Name wird in `taken` (klein geschrieben) vermerkt.
+fn unique(taken: &mut HashSet<String>, name: String, id: i64) -> String {
+    let mut candidate = name.clone();
+    let mut i = 1;
+    while !taken.insert(candidate.to_lowercase()) {
+        candidate = match i {
+            1 => with_suffix(&name, &id.to_string()),
+            _ => with_suffix(&name, &format!("{id}-{i}")),
+        };
         i += 1;
     }
     candidate
@@ -1335,5 +1337,27 @@ mod tests {
         assert_eq!(names(Dir::Coll(1)), ["Rechnungen", "A.pdf"]);
         assert_eq!(names(Dir::Coll(2)), ["A.pdf", "A (11).pdf"]);
         assert_eq!(names(Dir::Inbox), ["Neu.txt"]);
+    }
+
+    #[test]
+    fn name_collisions() {
+        // Ohne Groß-/Kleinschreibung; ist auch „Name (id)“ vergeben, folgt „Name (id-2)“
+        let s = Snapshot::build(
+            vec![],
+            vec![doc(5, "x (7)", "x.pdf", &[]), doc(6, "X", "x.pdf", &[]), doc(7, "x", "x.pdf", &[])],
+        );
+        let names = s.entries[&Dir::Inbox].iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+        assert_eq!(names, ["x (7).pdf", "X.pdf", "x (7-2).pdf"]);
+    }
+
+    #[test]
+    fn big_folder() {
+        // Früher quadratisch: 20 000 Dokumente in einem Ordner dauerten im
+        // Debug-Build über eine Minute
+        let docs = (0..20_000).map(|i| doc(i, &format!("Dok {}", i % 15_000), "a.pdf", &[])).collect();
+        let t = Instant::now();
+        let s = Snapshot::build(vec![], docs);
+        assert_eq!(s.entries[&Dir::Inbox].len(), 20_000);
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     }
 }

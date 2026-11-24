@@ -241,6 +241,7 @@ fn run(
     activity: SharedLog,
 ) {
     let mut next = Duration::ZERO;
+    let mut pin_retries = 0;
     loop {
         match rx.recv_timeout(next) {
             Ok(()) => loop {
@@ -267,14 +268,23 @@ fn run(
             a.finished(&res);
         }
         // Auch ohne Verbindung zum Server: Freigeben braucht kein Netz
-        apply_pins(&root, &activity);
+        let pins_pending = apply_pins(&root, &activity);
         next = match res {
             Ok(p) if p.pending => Duration::from_secs(3),
             Ok(_) => POLL,
             Err(_) => Duration::from_secs(30),
         };
+        // Liegen gebliebenes (meist: Datei kurz von Indexer oder Virenscanner
+        // geöffnet) bald erneut versuchen, aber nicht endlos im Sekundentakt
+        pin_retries = if pins_pending { pin_retries + 1 } else { 0 };
+        if pins_pending && pin_retries <= PIN_RETRIES {
+            next = next.min(Duration::from_secs(3));
+        }
     }
 }
+
+/// So oft wird Liegengebliebenes aus [`apply_pins`] im Schnelltakt wiederholt
+const PIN_RETRIES: u32 = 10;
 
 const ATTR_PINNED: u32 = 0x0008_0000;
 const ATTR_UNPINNED: u32 = 0x0010_0000;
@@ -284,9 +294,11 @@ const ATTR_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
 /// „Speicherplatz freigeben“ und „Immer auf diesem Gerät behalten“ umsetzen.
 /// Windows setzt dafür nur den Pin-Status; Laden und Freigeben ist Sache des
 /// Anbieters. Bleibt etwas liegen (Datei geöffnet, Änderung noch nicht
-/// hochgeladen, kein Netz), klappt es beim nächsten Durchlauf.
-fn apply_pins(root: &Path, activity: &SharedLog) {
+/// hochgeladen, kein Netz), klappt es beim nächsten Durchlauf. `true`: es ist
+/// etwas liegen geblieben.
+fn apply_pins(root: &Path, activity: &SharedLog) -> bool {
     use std::os::windows::fs::MetadataExt;
+    let mut pending = false;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = fs::read_dir(&dir) else { continue };
@@ -302,9 +314,16 @@ fn apply_pins(root: &Path, activity: &SharedLog) {
             }
             let Ok(attrs) = entry.metadata().map(|m| m.file_attributes()) else { continue };
             let online = attrs & ATTR_RECALL_ON_DATA_ACCESS != 0;
-            if attrs & ATTR_UNPINNED != 0 && !online {
+            if attrs & ATTR_UNPINNED != 0 && online {
+                // Schon nur online: Wunsch erfüllt. Zurücksetzen, sonst würde die
+                // Datei nach späterem Öffnen gleich wieder freigegeben.
+                let _ = open_attr(&path).and_then(|mut p| {
+                    p.mark_pin(PinState::Unspecified, PinOptions::default()).map(|_| ()).map_err(win)
+                });
+            } else if attrs & ATTR_UNPINNED != 0 {
                 if let Err(e) = free_space(&path) {
                     log::debug!("Büro-Sync: {} nicht freigegeben: {e}", path.display());
+                    pending = true;
                 } else if let Ok(mut l) = activity.lock() {
                     let rel = path.strip_prefix(root).unwrap_or(&path).display().to_string();
                     l.add(ActKind::Change, rel, "Speicherplatz freigegeben");
@@ -316,6 +335,7 @@ fn apply_pins(root: &Path, activity: &SharedLog) {
             }
         }
     }
+    pending
 }
 
 /// Inhalt einer abgeglichenen Datei freigeben; sie bleibt als Platzhalter
