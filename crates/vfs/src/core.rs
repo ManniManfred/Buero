@@ -182,6 +182,12 @@ pub(crate) fn with_suffix(name: &str, suffix: &str) -> String {
     }
 }
 
+/// Änderungsdatum der Datei eines Dokuments: das der hochgeladenen Datei,
+/// falls der Server es kennt, sonst die letzte Änderung am Server
+pub(crate) fn doc_mtime(d: &DocumentSummary) -> i64 {
+    d.file_mtime.unwrap_or(d.updated_at)
+}
+
 fn ts(secs: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs.max(0) as u64)
 }
@@ -497,7 +503,7 @@ impl Vfs {
                     ino,
                     kind: Kind::File,
                     size: open_size.unwrap_or(d.size.max(0) as u64),
-                    mtime: ts(d.updated_at),
+                    mtime: ts(doc_mtime(d)),
                     ctime: ts(d.updated_at),
                     crtime: ts(d.created_at),
                 })
@@ -512,7 +518,7 @@ impl Vfs {
                     .unwrap_or(0);
                 let mtime = meta
                     .and_then(|m| m.modified().ok())
-                    .or(shadow.map(|d| ts(d.updated_at)))
+                    .or(shadow.map(|d| ts(doc_mtime(d))))
                     .unwrap_or(lf.created);
                 Ok(Attr { ino, kind: Kind::File, size, mtime, ctime: mtime, crtime: lf.created })
             }
@@ -1296,6 +1302,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             document_date: None,
+            file_mtime: None,
             version: 1,
             extract_status: "done".into(),
             page_count: None,

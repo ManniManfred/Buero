@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use shared::{Collection, CollectionInput, DocumentSummary, DocumentUpdate};
 
 use crate::client::{ApiError, ApiResult, Client};
-use crate::core::{is_temp, sanitize_name, stem, title_from_name, Dir, Entry, Snapshot, INBOX_NAME};
+use crate::core::{doc_mtime, is_temp, sanitize_name, stem, title_from_name, Dir, Entry, Snapshot, INBOX_NAME};
 
 /// Pfad relativ zum Sync-Ordner, als Liste der Namen
 pub type RelPath = Vec<String>;
@@ -930,7 +930,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                             // Lokale Änderung wird beim nächsten Durchlauf hochgeladen
                             pass.pending = true;
                         } else if local_version != doc.version {
-                            match self.local.replace_file(&cur, &meta, size, doc.updated_at) {
+                            match self.local.replace_file(&cur, &meta, size, doc_mtime(doc)) {
                                 Ok(()) => {
                                     changed = true;
                                     pass.act(ActKind::Download, show(&cur), "Neue Version vom Server");
@@ -948,7 +948,7 @@ impl<R: Remote, L: LocalFs> Engine<R, L> {
                         if by_path.contains_key(&lower(&path)) {
                             continue; // belegt (neue lokale Datei gleichen Namens)
                         }
-                        match self.local.create_file(&path, &meta, size, doc.updated_at) {
+                        match self.local.create_file(&path, &meta, size, doc_mtime(doc)) {
                             Ok(()) => {
                                 changed = true;
                                 pass.act(ActKind::Download, show(&path), "Neu vom Server");
@@ -1015,6 +1015,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000 + version,
             document_date: None,
+            file_mtime: None,
             version,
             extract_status: "done".into(),
             page_count: None,
@@ -1151,6 +1152,8 @@ mod tests {
         content: Option<String>,
         dirty: bool,
         stamp: u64,
+        /// Änderungsdatum, das der Abgleich dem Platzhalter gegeben hat
+        mtime: i64,
     }
 
     struct FakeLocal {
@@ -1177,14 +1180,14 @@ mod tests {
             let p = Self::p(path);
             let st = self.tick();
             let mut n = self.nodes.borrow_mut();
-            let node = n.entry(lower(&p)).or_insert(Node { path: p.clone(), is_dir: false, meta: None, content: None, dirty: true, stamp: 0 });
+            let node = n.entry(lower(&p)).or_insert(Node { path: p.clone(), is_dir: false, meta: None, content: None, dirty: true, stamp: 0, mtime: 0 });
             node.content = Some(content.into());
             node.dirty = true;
             node.stamp = st;
         }
         fn mkdir(&self, path: &str) {
             let p = Self::p(path);
-            self.nodes.borrow_mut().insert(lower(&p), Node { path: p, is_dir: true, meta: None, content: None, dirty: false, stamp: 0 });
+            self.nodes.borrow_mut().insert(lower(&p), Node { path: p, is_dir: true, meta: None, content: None, dirty: false, stamp: 0, mtime: 0 });
         }
         fn user_rename(&self, from: &str, to: &str) {
             self.rename(&Self::p(from), &Self::p(to)).unwrap();
@@ -1228,23 +1231,24 @@ mod tests {
             if n.contains_key(&lower(path)) {
                 return Err(io_err("exists"));
             }
-            n.insert(lower(path), Node { path: path.to_vec(), is_dir: true, meta: Some(meta.clone()), content: None, dirty: false, stamp: 0 });
+            n.insert(lower(path), Node { path: path.to_vec(), is_dir: true, meta: Some(meta.clone()), content: None, dirty: false, stamp: 0, mtime: 0 });
             Ok(())
         }
-        fn create_file(&self, path: &[String], meta: &Meta, _size: u64, _mtime: i64) -> std::io::Result<()> {
+        fn create_file(&self, path: &[String], meta: &Meta, _size: u64, mtime: i64) -> std::io::Result<()> {
             let mut n = self.nodes.borrow_mut();
             if n.contains_key(&lower(path)) {
                 return Err(io_err("exists"));
             }
-            n.insert(lower(path), Node { path: path.to_vec(), is_dir: false, meta: Some(meta.clone()), content: None, dirty: false, stamp: 0 });
+            n.insert(lower(path), Node { path: path.to_vec(), is_dir: false, meta: Some(meta.clone()), content: None, dirty: false, stamp: 0, mtime });
             Ok(())
         }
-        fn replace_file(&self, path: &[String], meta: &Meta, _size: u64, _mtime: i64) -> std::io::Result<()> {
+        fn replace_file(&self, path: &[String], meta: &Meta, _size: u64, mtime: i64) -> std::io::Result<()> {
             let mut n = self.nodes.borrow_mut();
             let node = n.get_mut(&lower(path)).ok_or(io_err("missing"))?;
             node.meta = Some(meta.clone());
             node.content = None;
             node.dirty = false;
+            node.mtime = mtime;
             Ok(())
         }
         fn snapshot(&self, path: &[String]) -> std::io::Result<(PathBuf, u64)> {
@@ -1320,6 +1324,29 @@ mod tests {
             Some(Meta::Doc { id: doc, dir: steuer, version: 1, name: "Bescheid 2024.pdf".into() })
         );
         assert!(e.remote.log().is_empty(), "{:?}", e.remote.log());
+    }
+
+    #[test]
+    fn placeholders_get_file_date() {
+        let r = FakeRemote::default();
+        let alt = r.doc("Alt", "alt.txt", vec![], "a");
+        let neu = r.doc("Neu", "neu.txt", vec![], "b");
+        r.0.borrow_mut().docs.get_mut(&neu).unwrap().0.file_mtime = Some(1_600_000_000);
+        let mut e = Engine::new(r, FakeLocal::new(), None);
+        e.reconcile().unwrap();
+        // Ohne bekanntes Datei-Datum: letzte Änderung am Server
+        assert_eq!(e.local.node("Eingang/Alt.txt").mtime, e.remote.get(alt).unwrap().0.updated_at);
+        assert_eq!(e.local.node("Eingang/Neu.txt").mtime, 1_600_000_000);
+
+        // Neue Fassung vom Server bringt ihr Datum mit
+        {
+            let mut s = e.remote.0.borrow_mut();
+            let d = &mut s.docs.get_mut(&neu).unwrap().0;
+            d.version += 1;
+            d.file_mtime = Some(1_700_000_000);
+        }
+        e.reconcile().unwrap();
+        assert_eq!(e.local.node("Eingang/Neu.txt").mtime, 1_700_000_000);
     }
 
     #[test]

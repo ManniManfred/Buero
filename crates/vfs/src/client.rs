@@ -167,13 +167,16 @@ impl Client {
         collection_ids: &[i64],
     ) -> ApiResult<DocumentSummary> {
         let ids = collection_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let mtime = mtime_of(file);
         let mut reader = open(file)?;
-        let mut form = Form::new()
-            .part("file", Part::reader(&mut reader).file_name(filename))
-            .text("title", title);
+        let mut form = Form::new().text("title", title);
         if !ids.is_empty() {
             form = form.text("collection_ids", &ids);
         }
+        if let Some(t) = &mtime {
+            form = form.text("file_mtime", t);
+        }
+        let form = form.part("file", Part::reader(&mut reader).file_name(filename));
         let r = self.auth(self.agent.post(&self.url("/api/documents"))).send(form);
         let res: Vec<UploadResult> = Self::json(r)?;
         res.into_iter()
@@ -185,8 +188,13 @@ impl Client {
     /// Neue Version hochladen. `basis`: Version, auf der die Änderung beruht
     /// (Server lehnt mit 409 ab, wenn es inzwischen eine neuere gibt).
     pub fn new_version(&self, id: i64, file: &Path, filename: &str, basis: Option<i64>) -> ApiResult<DocumentSummary> {
+        let mtime = mtime_of(file);
         let mut reader = open(file)?;
-        let form = Form::new().part("file", Part::reader(&mut reader).file_name(filename));
+        let mut form = Form::new();
+        if let Some(t) = &mtime {
+            form = form.text("file_mtime", t);
+        }
+        let form = form.part("file", Part::reader(&mut reader).file_name(filename));
         let mut path = format!("/api/documents/{id}/versions");
         if let Some(b) = basis {
             path.push_str(&format!("?basis={b}"));
@@ -214,6 +222,13 @@ impl Client {
     pub fn delete_collection(&self, id: i64) -> ApiResult<()> {
         Self::check(self.auth(self.agent.delete(&self.url(&format!("/api/collections/{id}")))).call()).map(|_| ())
     }
+}
+
+/// Änderungsdatum einer Datei in Unix-Sekunden (für den Server als Text)
+fn mtime_of(file: &Path) -> Option<String> {
+    let t = std::fs::metadata(file).ok()?.modified().ok()?;
+    let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    (secs > 0).then(|| secs.to_string())
 }
 
 fn open(file: &Path) -> ApiResult<impl Read> {

@@ -73,6 +73,10 @@ pub struct DocumentSummary {
     pub updated_at: i64,
     /// Fachliches Datum des Dokuments (z. B. Rechnungsdatum), `YYYY-MM-DD`
     pub document_date: Option<String>,
+    /// Änderungsdatum der hochgeladenen Datei (Unix-Sekunden), falls bekannt;
+    /// der Sync-Ordner gibt Dateien dieses Datum
+    #[serde(default)]
+    pub file_mtime: Option<i64>,
     pub version: i64,
     /// pending | processing | done | failed
     pub extract_status: String,

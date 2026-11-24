@@ -115,6 +115,8 @@ pub(crate) struct UploadForm {
     pub tag_names: Vec<String>,
     pub title: Option<String>,
     pub date: Option<String>,
+    /// Änderungsdatum der Datei (Unix-Sekunden), Feld `file_mtime`
+    pub file_mtime: Option<i64>,
     /// Bereits vorhandene Dokumente (gleicher Inhalt) trotzdem den Sammlungen
     /// und Tags zuordnen. Für Uploads über Freigabelinks abgeschaltet, damit
     /// Fremde keine bestehenden Dokumente in die freigegebene Sammlung holen.
@@ -125,7 +127,7 @@ pub(crate) struct UploadForm {
 
 /// Multipart-Formular lesen: beliebig viele Felder `file`, optional
 /// `collection_ids`, `tag_ids` (kommagetrennt), `tags` (Namen, kommagetrennt),
-/// `title` und `document_date`.
+/// `title`, `document_date` und `file_mtime` (Unix-Sekunden).
 /// `max_bytes`: Höchstgröße pro Datei.
 pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_bytes: usize) -> AppResult<UploadForm> {
     let mut f = UploadForm { link_duplicates: true, ..Default::default() };
@@ -155,6 +157,7 @@ pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_byte
                 "document_date" => {
                     f.date = Some(field.text().await?).filter(|d| util::valid_date(d))
                 }
+                "file_mtime" => f.file_mtime = parse_mtime(&field.text().await?),
                 _ => {}
             }
         }
@@ -173,6 +176,11 @@ pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_byte
     Ok(f)
 }
 
+/// Änderungsdatum aus dem Formular (Unix-Sekunden); Unsinniges wird ignoriert
+fn parse_mtime(s: &str) -> Option<i64> {
+    s.trim().parse::<i64>().ok().filter(|t| *t > 0)
+}
+
 pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<Json<Vec<UploadResult>>> {
     let form = read_upload_form(&st, &mut mp, st.config.max_upload_bytes).await?;
     Ok(Json(store_uploads(&st, form).await?))
@@ -180,7 +188,7 @@ pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<
 
 /// Gestagte Dateien als Dokumente anlegen (Duplikate werden erkannt).
 pub(crate) async fn store_uploads(st: &AppState, form: UploadForm) -> AppResult<Vec<UploadResult>> {
-    let UploadForm { uploads, collections, tags, title, date, link_duplicates, always_new, .. } = form;
+    let UploadForm { uploads, collections, tags, title, date, file_mtime, link_duplicates, always_new, .. } = form;
     let single = uploads.len() == 1;
     let mut results = Vec::with_capacity(uploads.len());
     let mut touched = Vec::new();
@@ -206,7 +214,7 @@ pub(crate) async fn store_uploads(st: &AppState, form: UploadForm) -> AppResult<
             let mut tx = st.pool.begin().await?;
             let id: i64 = sqlx::query_scalar(
                 "INSERT INTO documents (title, original_filename, mime, extension, size, sha256, version, \
-                 created_at, updated_at, document_date) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?) RETURNING id",
+                 created_at, updated_at, document_date, file_mtime) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?) RETURNING id",
             )
             .bind(&doc_title)
             .bind(&u.filename)
@@ -217,6 +225,7 @@ pub(crate) async fn store_uploads(st: &AppState, form: UploadForm) -> AppResult<
             .bind(ts)
             .bind(ts)
             .bind(&date)
+            .bind(if single { file_mtime } else { None })
             .fetch_one(&mut *tx)
             .await?;
             sqlx::query(
@@ -339,22 +348,37 @@ pub async fn new_version(
             ));
         }
     }
-    let mut upload = None;
-    while let Some(field) = mp.next_field().await? {
-        if field.name() == Some("file") {
-            let filename = field.file_name().map(sanitize_filename).unwrap_or_else(|| doc.original_filename.clone());
-            let mime = guess_mime(&filename, field.content_type());
-            let staged = st
-                .storage
-                .stage(Box::pin(field), st.config.max_upload_bytes)
-                .await
-                .map_err(|e| AppError::bad_request(e.to_string()))?;
-            upload = Some(Upload { staged, filename, mime });
-            break;
+    let mut upload: Option<Upload> = None;
+    let mut file_mtime = None;
+    let res: AppResult<()> = async {
+        while let Some(field) = mp.next_field().await? {
+            match field.name() {
+                Some("file") if upload.is_none() => {
+                    let filename =
+                        field.file_name().map(sanitize_filename).unwrap_or_else(|| doc.original_filename.clone());
+                    let mime = guess_mime(&filename, field.content_type());
+                    let staged = st
+                        .storage
+                        .stage(Box::pin(field), st.config.max_upload_bytes)
+                        .await
+                        .map_err(|e| AppError::bad_request(e.to_string()))?;
+                    upload = Some(Upload { staged, filename, mime });
+                }
+                Some("file_mtime") => file_mtime = parse_mtime(&field.text().await?),
+                _ => {}
+            }
         }
+        Ok(())
+    }
+    .await;
+    if let Err(e) = res {
+        if let Some(u) = &upload {
+            st.storage.discard(&u.staged).await;
+        }
+        return Err(e);
     }
     let u = upload.ok_or_else(|| AppError::bad_request("Keine Datei übermittelt"))?;
-    if add_version(&st, &doc, u).await? {
+    if add_version(&st, &doc, u, file_mtime).await? {
         // Eine evtl. offene Euro-Office-Sitzung bezieht sich auf die alte Fassung
         sqlx::query("UPDATE documents SET office_key = NULL WHERE id = ?").bind(id).execute(&st.pool).await?;
     }
@@ -362,8 +386,14 @@ pub async fn new_version(
 }
 
 /// Gestagte Datei als neue Version eines Dokuments speichern. Gleicher Inhalt
-/// wie die aktuelle Version wird verworfen (Rückgabe `false`).
-pub(crate) async fn add_version(st: &AppState, doc: &db::DocRow, u: Upload) -> AppResult<bool> {
+/// wie die aktuelle Version wird verworfen (Rückgabe `false`). `file_mtime`:
+/// Änderungsdatum der Datei, falls bekannt (sonst gilt `updated_at`).
+pub(crate) async fn add_version(
+    st: &AppState,
+    doc: &db::DocRow,
+    u: Upload,
+    file_mtime: Option<i64>,
+) -> AppResult<bool> {
     let id = doc.id;
     if u.staged.sha256 == doc.sha256 {
         st.storage.discard(&u.staged).await;
@@ -387,7 +417,8 @@ pub(crate) async fn add_version(st: &AppState, doc: &db::DocRow, u: Upload) -> A
     .await?;
     sqlx::query(
         "UPDATE documents SET original_filename = ?, mime = ?, extension = ?, size = ?, sha256 = ?, version = ?, \
-         updated_at = ?, extract_status = 'pending', extract_error = NULL, has_thumbnail = 0 WHERE id = ?",
+         updated_at = ?, file_mtime = ?, extract_status = 'pending', extract_error = NULL, has_thumbnail = 0 \
+         WHERE id = ?",
     )
     .bind(&u.filename)
     .bind(&u.mime)
@@ -396,6 +427,7 @@ pub(crate) async fn add_version(st: &AppState, doc: &db::DocRow, u: Upload) -> A
     .bind(&u.staged.sha256)
     .bind(version)
     .bind(ts)
+    .bind(file_mtime)
     .bind(id)
     .execute(&mut *tx)
     .await?;

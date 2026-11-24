@@ -251,6 +251,6 @@ async fn save_from_url(st: &AppState, id: i64, url: &str, filetype: Option<&str>
         filename = format!("{stem}.{ft}");
     }
     let mime = guess_mime(&filename, Some(&doc.mime));
-    add_version(st, &doc, Upload { staged, filename, mime }).await?;
+    add_version(st, &doc, Upload { staged, filename, mime }, None).await?;
     Ok(())
 }

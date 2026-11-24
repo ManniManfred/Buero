@@ -47,10 +47,12 @@ pub struct DocRow {
     pub page_count: Option<i64>,
     pub has_thumbnail: bool,
     pub parent_id: Option<i64>,
+    pub file_mtime: Option<i64>,
 }
 
 pub const DOC_COLS: &str = "id, title, description, original_filename, mime, extension, size, sha256, \
-    version, created_at, updated_at, document_date, extract_status, extract_error, page_count, has_thumbnail, parent_id";
+    version, created_at, updated_at, document_date, extract_status, extract_error, page_count, has_thumbnail, parent_id, \
+    file_mtime";
 
 impl DocRow {
     pub fn summary(&self, collection_ids: Vec<i64>, tag_ids: Vec<i64>) -> DocumentSummary {
@@ -64,6 +66,7 @@ impl DocRow {
             created_at: self.created_at,
             updated_at: self.updated_at,
             document_date: self.document_date.clone(),
+            file_mtime: self.file_mtime,
             version: self.version,
             extract_status: self.extract_status.clone(),
             page_count: self.page_count,

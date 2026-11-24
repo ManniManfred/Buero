@@ -476,6 +476,10 @@ impl LocalFs for WinLocal {
         let copy = self.uploads.join(format!("{}-{n}", std::process::id()));
         let mut dst = File::create(&copy)?;
         std::io::copy(&mut src, &mut dst)?;
+        // Änderungsdatum mitnehmen: der Client schickt es beim Hochladen mit
+        if let Ok(t) = src.metadata().and_then(|m| m.modified()) {
+            let _ = dst.set_modified(t);
+        }
         dst.sync_all()?;
         Ok((copy, usn as u64))
     }
