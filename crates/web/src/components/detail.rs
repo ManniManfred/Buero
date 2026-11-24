@@ -10,6 +10,40 @@ use crate::icons::Icon;
 use crate::state::{collection_path, ctx, Ctx, ShareTarget};
 use crate::util::{format_size, format_ts, status_label};
 
+/// Dateiname zum Öffnen: Titel mit der Endung der Originaldatei
+fn open_file_name(s: &DocumentSummary) -> String {
+    let ext = shared::extension_of(&s.original_filename);
+    let title = s.title.trim();
+    if title.is_empty() {
+        s.original_filename.clone()
+    } else if ext.is_empty() || title.to_lowercase().ends_with(&format!(".{}", ext.to_lowercase())) {
+        title.to_string()
+    } else {
+        format!("{title}.{ext}")
+    }
+}
+
+/// „Öffnen“: im Desktop-Client mit dem passenden Programm (Excel, Word, …),
+/// sonst im Browser (neuer Tab)
+fn open_document(c: Ctx, s: &DocumentSummary, url: &str) {
+    if !crate::api::is_desktop() {
+        open_external(url);
+        return;
+    }
+    let args = serde_json::json!({
+        "server": c.api.base.get_untracked(),
+        "token": c.api.token.get_untracked(),
+        "id": s.id,
+        "version": s.version,
+        "filename": open_file_name(s),
+    });
+    spawn_local(async move {
+        if let Err(e) = crate::api::invoke::<()>("document_open", args).await {
+            c.notify(e, true);
+        }
+    });
+}
+
 fn save(c: Ctx, id: i64, upd: DocumentUpdate, detail: RwSignal<Option<DocumentDetail>>) {
     spawn_local(async move {
         match c.api.send::<_, DocumentSummary>("PATCH", &format!("/api/documents/{id}"), &upd).await {
@@ -184,7 +218,8 @@ fn DetailBody(
     };
 
     let open_url = file_url.clone();
-    let ext = shared::extension_of(&s.original_filename).to_ascii_lowercase();
+    let open_doc = s.clone();
+    let ext =shared::extension_of(&s.original_filename).to_ascii_lowercase();
     let tupfer_ext = ext.clone();
     let office_btn = move || {
         (c.features.get().office && shared::office_document_type(&ext).is_some()).then(|| {
@@ -225,7 +260,7 @@ fn DetailBody(
             {office_btn}
             {tupfer_btn}
             {text_btn}
-            <button on:click=move |_| open_external(&open_url)><Icon name="external" />"Öffnen"</button>
+            <button on:click=move |_| open_document(c, &open_doc, &open_url)><Icon name="external" />"Öffnen"</button>
             <button on:click=move |_| open_external(&download_url)><Icon name="download" />"Herunterladen"</button>
             <button title="Bearbeitete Datei als neue Version hochladen"
                 on:click=move |_| { if let Some(i) = version_input.get() { i.click(); } }><Icon name="history" />"Neue Version"</button>

@@ -444,6 +444,78 @@ fn drive_open(app: tauri::AppHandle, st: State<'_, DriveState>, collection_id: O
     app.opener().open_path(p, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Dokument mit dem passenden Programm öffnen (Excel, Word, …). Der Browser
+/// kann solche Dateien nicht anzeigen und lädt sie nur still herunter.
+///
+/// Die Datei landet schreibgeschützt im Zwischenspeicher, je Dokument und
+/// Fassung in einem eigenen Ordner: Erneutes Öffnen nimmt die vorhandene Datei
+/// (auch wenn sie noch geöffnet ist), und versehentliche Änderungen gehen nicht
+/// unbemerkt verloren (Speichern geht nur unter neuem Namen; zurück nach Büro
+/// über „Neue Version“ oder den Sync-Ordner).
+#[tauri::command]
+async fn document_open(
+    app: tauri::AppHandle,
+    server: String,
+    token: Option<String>,
+    id: i64,
+    version: i64,
+    filename: String,
+) -> Result<(), String> {
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("geoeffnet").join(format!("{id}-v{version}"));
+    let file = dir.join(safe_file_name(&filename));
+    if !file.exists() {
+        let target = file.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("Zwischenspeicher: {e}"))?;
+            // Ältere Fassungen desselben Dokuments wegräumen (geöffnete bleiben liegen)
+            if let Some(parent) = dir.parent() {
+                let prefix = format!("{id}-v");
+                for e in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if name.starts_with(&prefix) && e.path() != dir {
+                        let _ = remove_tree(&e.path());
+                    }
+                }
+            }
+            let client = buero_vfs::client::Client::new(&server, token);
+            client.download(id, &target).map_err(|e| format!("Laden fehlgeschlagen: {e}"))?;
+            let mut perm = std::fs::metadata(&target).map_err(|e| e.to_string())?.permissions();
+            perm.set_readonly(true);
+            let _ = std::fs::set_permissions(&target, perm);
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
+    app.opener().open_path(file.display().to_string(), None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Dateiname ohne Zeichen, die Windows nicht erlaubt
+fn safe_file_name(name: &str) -> String {
+    let s: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
+    let s = s.trim().trim_end_matches(['.', ' ']).to_string();
+    if s.is_empty() {
+        "Dokument".into()
+    } else {
+        s
+    }
+}
+
+/// Ordner samt (schreibgeschützter) Dateien löschen
+fn remove_tree(dir: &std::path::Path) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)?.flatten() {
+        let p = e.path();
+        if let Ok(m) = e.metadata() {
+            let mut perm = m.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            let _ = std::fs::set_permissions(&p, perm);
+        }
+        let _ = std::fs::remove_file(&p);
+    }
+    std::fs::remove_dir(dir)
+}
+
 // ---------------------------------------------------------------------------
 // Aktivität der Sync-Ordner
 // ---------------------------------------------------------------------------
@@ -714,6 +786,7 @@ fn main() {
             drive_unmount,
             drive_sync,
             drive_open,
+            document_open,
             folder_add,
             folder_remove,
             update_check,
