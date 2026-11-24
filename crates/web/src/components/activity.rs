@@ -153,7 +153,7 @@ pub fn ActivityWindow() -> impl IntoView {
                 }.into_any(),
                 Some(list) => list
                     .into_iter()
-                    .map(|f| view! { <FolderCard folder=f only_errors=only_errors /> })
+                    .map(|f| view! { <FolderCard folder=f only_errors=only_errors message=message /> })
                     .collect_view()
                     .into_any(),
             }}
@@ -162,7 +162,7 @@ pub fn ActivityWindow() -> impl IntoView {
 }
 
 #[component]
-fn FolderCard(folder: Folder, only_errors: RwSignal<bool>) -> impl IntoView {
+fn FolderCard(folder: Folder, only_errors: RwSignal<bool>, message: RwSignal<Option<String>>) -> impl IntoView {
     let Folder { collection_id, name, path, connected, state } = folder;
     let (status, class) = match &state {
         _ if !connected => ("getrennt".to_string(), "pill"),
@@ -183,6 +183,13 @@ fn FolderCard(folder: Folder, only_errors: RwSignal<bool>) -> impl IntoView {
             let _ = invoke::<()>("sync_now", json!({ "collectionId": collection_id })).await;
         });
     };
+    let open = move |_| {
+        spawn_local(async move {
+            if let Err(e) = invoke::<()>("drive_open", json!({ "collectionId": collection_id })).await {
+                message.set(Some(e));
+            }
+        });
+    };
 
     view! {
         <section class="card activity-card">
@@ -191,6 +198,7 @@ fn FolderCard(folder: Folder, only_errors: RwSignal<bool>) -> impl IntoView {
                 <strong>{name}</strong>
                 <span class=class>{status}</span>
                 <Show when=move || connected>
+                    <button class="icon" title="Ordner im Explorer öffnen" on:click=open><Icon name="folder-open" /></button>
                     <button class="icon" title="Diesen Ordner sofort abgleichen" on:click=sync><Icon name="rotate" /></button>
                 </Show>
             </div>
