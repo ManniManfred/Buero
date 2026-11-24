@@ -125,11 +125,7 @@ fn cors() -> CorsLayer {
     use axum::http::HeaderValue;
     use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin};
     CorsLayer::new()
-        .allow_origin(AllowOrigin::list([
-            HeaderValue::from_static("tauri://localhost"),
-            HeaderValue::from_static("http://tauri.localhost"),
-            HeaderValue::from_static("https://tauri.localhost"),
-        ]))
+        .allow_origin(AllowOrigin::list(crate::security::DESKTOP_ORIGINS.map(HeaderValue::from_static)))
         .allow_methods(AllowMethods::mirror_request())
         .allow_headers(AllowHeaders::mirror_request())
         .max_age(std::time::Duration::from_secs(3600))

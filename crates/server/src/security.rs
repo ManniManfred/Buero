@@ -373,6 +373,17 @@ pub fn signed_access(st: &AppState, req: &Request) -> bool {
 // ---------------------------------------------------------------------------
 // HTTP-Header
 
+/// Herkunft der Oberfläche im Desktop-Client (Tauri: macOS/Linux, Windows)
+pub const DESKTOP_ORIGINS: [&str; 3] = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+
+/// `frame-ancestors` für Dokumentdateien: außer der Webseite selbst darf auch
+/// der Desktop-Client sie einbetten (Vorschau), dessen Oberfläche von einem
+/// eigenen Ursprung kommt. `X-Frame-Options` kennt keine solche Liste und
+/// entfällt dann (siehe [`security_headers`]).
+pub fn file_frame_ancestors() -> String {
+    format!("frame-ancestors 'self' {}", DESKTOP_ORIGINS.join(" "))
+}
+
 /// Content-Security-Policy für die Oberfläche. Inline-Skripte (Startskript von
 /// trunk) werden per Hash erlaubt, Euro-Office per Herkunft.
 pub fn build_csp(web_dir: &Path, office_url: Option<&str>) -> HeaderValue {
@@ -421,7 +432,15 @@ pub async fn security_headers(State(st): State<AppState>, req: Request, next: Ne
     let mut res = next.run(req).await;
     let h = res.headers_mut();
     h.entry(header::X_CONTENT_TYPE_OPTIONS).or_insert(HeaderValue::from_static("nosniff"));
-    h.entry(header::X_FRAME_OPTIONS).or_insert(HeaderValue::from_static("SAMEORIGIN"));
+    // Legt die Antwort selbst fest, wer sie einbetten darf, gilt das statt
+    // X-Frame-Options (das sonst Vorrang hätte und keine Ausnahmen kennt)
+    let own_ancestors = h
+        .get(header::CONTENT_SECURITY_POLICY)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("frame-ancestors"));
+    if !own_ancestors {
+        h.entry(header::X_FRAME_OPTIONS).or_insert(HeaderValue::from_static("SAMEORIGIN"));
+    }
     h.entry(header::REFERRER_POLICY).or_insert(HeaderValue::from_static("same-origin"));
     if https {
         h.entry(header::STRICT_TRANSPORT_SECURITY).or_insert(HeaderValue::from_static("max-age=31536000"));

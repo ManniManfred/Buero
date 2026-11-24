@@ -661,13 +661,17 @@ pub(crate) async fn serve_document(
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
     res.headers_mut()
         .insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
-    // Aktive Inhalte (HTML, SVG, XML) nicht im Kontext der App ausführen.
-    // (Nicht für PDF: Chrome zeigt PDFs in Sandbox-Kontexten nicht an.)
-    if mime.contains("html") || mime.contains("svg") || mime.contains("xml") || mime.contains("javascript") {
-        res.headers_mut().insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static("sandbox; default-src 'none'; img-src * data:; style-src 'unsafe-inline'"),
-        );
+    // Einbetten (Vorschau) auch im Desktop-Client erlauben. Aktive Inhalte
+    // (HTML, SVG, XML) außerdem nicht im Kontext der App ausführen.
+    // (Keine Sandbox für PDF: Chrome zeigt PDFs in Sandbox-Kontexten nicht an.)
+    let ancestors = crate::security::file_frame_ancestors();
+    let csp = if mime.contains("html") || mime.contains("svg") || mime.contains("xml") || mime.contains("javascript") {
+        format!("sandbox; default-src 'none'; img-src * data:; style-src 'unsafe-inline'; {ancestors}")
+    } else {
+        ancestors
+    };
+    if let Ok(v) = HeaderValue::from_str(&csp) {
+        res.headers_mut().insert(header::CONTENT_SECURITY_POLICY, v);
     }
     Ok(res)
 }
