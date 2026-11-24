@@ -6,7 +6,7 @@ members = ["crates/shared", "crates/server", "crates/web", "crates/desktop", "cr
 default-members = ["crates/server"]
 
 [workspace.package]
-version = "0.20.0"
+version = "0.21.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 authors = ["Manfred Roßkamp"]
