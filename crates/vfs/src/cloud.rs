@@ -33,7 +33,7 @@ use cloud_filter::error::{CResult, CloudErrorKind};
 use cloud_filter::ext::FileExt;
 use cloud_filter::filter::{info, ticket, Request, StateWatchEvent, SyncFilter};
 use cloud_filter::metadata::Metadata;
-use cloud_filter::placeholder::{ConvertOptions, PinState, Placeholder, UpdateOptions};
+use cloud_filter::placeholder::{ConvertOptions, PinOptions, PinState, Placeholder, UpdateOptions};
 use cloud_filter::placeholder_create_info::PlaceholderCreateInfo;
 use cloud_filter::root::{
     Connection, HydrationPolicy, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
@@ -217,7 +217,7 @@ pub fn mount(
         log: log.clone(),
     };
     let connection = Session::new().connect(&root, filter).map_err(|e| format!("Sync-Ordner verbinden: {e}"))?;
-    let local = WinLocal { root, uploads, counter: AtomicU64::new(0) };
+    let local = WinLocal { root: root.clone(), uploads, counter: AtomicU64::new(0) };
     let mut engine = Engine::new(client, local, Some(index));
     if let Some(c) = coll {
         engine = engine.scoped(c);
@@ -226,14 +226,20 @@ pub fn mount(
     let stop2 = stop.clone();
     let thread = std::thread::Builder::new()
         .name("buero-sync".into())
-        .spawn(move || run(engine, rx, stop2, log))
+        .spawn(move || run(engine, root, rx, stop2, log))
         .map_err(text)?;
     let _ = tx.send(());
     Ok(Mount { connection: Some(connection), stop, wake: tx, thread: Some(thread) })
 }
 
 /// Abgleich im Hintergrund: nach Änderungen (mit kurzer Ruhepause) und regelmäßig
-fn run(mut engine: Engine<Client, WinLocal>, rx: Receiver<()>, stop: Arc<AtomicBool>, activity: SharedLog) {
+fn run(
+    mut engine: Engine<Client, WinLocal>,
+    root: PathBuf,
+    rx: Receiver<()>,
+    stop: Arc<AtomicBool>,
+    activity: SharedLog,
+) {
     let mut next = Duration::ZERO;
     loop {
         match rx.recv_timeout(next) {
@@ -260,12 +266,70 @@ fn run(mut engine: Engine<Client, WinLocal>, rx: Receiver<()>, stop: Arc<AtomicB
         if let Ok(mut a) = activity.lock() {
             a.finished(&res);
         }
+        // Auch ohne Verbindung zum Server: Freigeben braucht kein Netz
+        apply_pins(&root, &activity);
         next = match res {
             Ok(p) if p.pending => Duration::from_secs(3),
             Ok(_) => POLL,
             Err(_) => Duration::from_secs(30),
         };
     }
+}
+
+const ATTR_PINNED: u32 = 0x0008_0000;
+const ATTR_UNPINNED: u32 = 0x0010_0000;
+/// Inhalt (ganz oder teilweise) nur online
+const ATTR_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+
+/// „Speicherplatz freigeben“ und „Immer auf diesem Gerät behalten“ umsetzen.
+/// Windows setzt dafür nur den Pin-Status; Laden und Freigeben ist Sache des
+/// Anbieters. Bleibt etwas liegen (Datei geöffnet, Änderung noch nicht
+/// hochgeladen, kein Netz), klappt es beim nächsten Durchlauf.
+fn apply_pins(root: &Path, activity: &SharedLog) {
+    use std::os::windows::fs::MetadataExt;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for entry in rd.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if ft.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(attrs) = entry.metadata().map(|m| m.file_attributes()) else { continue };
+            let online = attrs & ATTR_RECALL_ON_DATA_ACCESS != 0;
+            if attrs & ATTR_UNPINNED != 0 && !online {
+                if let Err(e) = free_space(&path) {
+                    log::debug!("Büro-Sync: {} nicht freigegeben: {e}", path.display());
+                } else if let Ok(mut l) = activity.lock() {
+                    let rel = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+                    l.add(ActKind::Change, rel, "Speicherplatz freigegeben");
+                }
+            } else if attrs & ATTR_PINNED != 0 && online {
+                if let Err(e) = open_attr(&path).and_then(|mut p| p.hydrate(..).map_err(win)) {
+                    log::debug!("Büro-Sync: {} nicht geladen: {e}", path.display());
+                }
+            }
+        }
+    }
+}
+
+/// Inhalt einer abgeglichenen Datei freigeben; sie bleibt als Platzhalter
+fn free_space(path: &Path) -> std::io::Result<()> {
+    let in_sync = open_attr(path)?.info().map_err(win)?.is_some_and(|i| i.is_in_sync() && i.modified_data_size() == 0);
+    if !in_sync {
+        return Err(win("noch nicht abgeglichen"));
+    }
+    // Exklusiv: schlägt fehl, solange die Datei geöffnet ist
+    let mut ph = Placeholder::options().exclusive().write_access().open(path).map_err(win)?;
+    ph.update(UpdateOptions::default().dehydrate(), None).map_err(win)?;
+    // Wie bei OneDrive: wird die Datei später wieder geöffnet, bleibt sie da
+    ph.mark_pin(PinState::Unspecified, PinOptions::default()).map_err(win)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
