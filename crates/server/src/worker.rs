@@ -140,7 +140,7 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
 
     if err.is_none() && crate::autotitle::scannable(&doc.extension) && crate::autotitle::is_scan_name(&doc.title) {
         task.phase("Titel aus dem Inhalt");
-        if let Err(e) = name_scan(state, &doc, &text).await {
+        if let Err(e) = name_scan(state, id, &doc.title, &text).await {
             tracing::warn!("Kein Titel aus dem Inhalt für {id}: {e:#}");
         }
     }
@@ -163,27 +163,83 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
 /// Scan mit automatischem Namen: Titel und Datum aus dem Inhalt. Der Titel
 /// wird nur ersetzt, wenn ihn niemand inzwischen geändert hat, das Datum nur,
 /// wenn noch keins gesetzt ist.
-async fn name_scan(state: &AppState, doc: &crate::db::DocRow, text: &str) -> anyhow::Result<()> {
+/// Liefert, ob sich etwas geändert hat.
+async fn name_scan(state: &AppState, id: i64, title: &str, text: &str) -> anyhow::Result<bool> {
     let today = crate::util::fmt_date(crate::util::now());
     let guess = crate::autotitle::guess(text, &today);
+    let mut changed = false;
     if let Some(t) = &guess.title {
         let done = sqlx::query("UPDATE documents SET title = ?, updated_at = ? WHERE id = ? AND title = ?")
             .bind(t)
             .bind(crate::util::now())
-            .bind(doc.id)
-            .bind(&doc.title)
+            .bind(id)
+            .bind(title)
             .execute(&state.pool)
             .await?;
         if done.rows_affected() > 0 {
-            tracing::info!("Dokument {}: Titel „{t}“ aus dem Inhalt", doc.id);
+            tracing::info!("Dokument {id}: Titel „{t}“ aus dem Inhalt");
+            changed = true;
         }
     }
     if let Some(d) = &guess.date {
-        sqlx::query("UPDATE documents SET document_date = ? WHERE id = ? AND IFNULL(document_date, '') = ''")
+        let done = sqlx::query("UPDATE documents SET document_date = ? WHERE id = ? AND IFNULL(document_date, '') = ''")
             .bind(d)
-            .bind(doc.id)
+            .bind(id)
             .execute(&state.pool)
             .await?;
+        changed |= done.rows_affected() > 0;
     }
+    Ok(changed)
+}
+
+/// Nach dem Start: bereits verarbeitete Scans, die noch ihren automatischen
+/// Namen tragen (z. B. aus der Zeit vor der Benennung aus dem Inhalt), nach
+/// denselben Regeln benennen. Findet sich nichts, bleibt der Name.
+pub fn spawn_name_scans(state: AppState) {
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = state.restart.cancelled() => return,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(20)) => {}
+        }
+        if let Err(e) = name_scans(&state).await {
+            tracing::warn!("Scans nachträglich benennen: {e:#}");
+        }
+    });
+}
+
+async fn name_scans(state: &AppState) -> anyhow::Result<()> {
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, title, extension FROM documents WHERE extract_status = 'done' AND IFNULL(content, '') <> ''",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let ids: Vec<(i64, String)> = rows
+        .into_iter()
+        .filter(|(_, title, ext)| crate::autotitle::scannable(ext) && crate::autotitle::is_scan_name(title))
+        .map(|(id, title, _)| (id, title))
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let task = crate::tasks::start("document", "Scans benennen", "", None);
+    let mut changed = Vec::new();
+    for (i, (id, title)) in ids.iter().enumerate() {
+        if state.restart.is_cancelled() {
+            break;
+        }
+        task.phase(format!("{} von {}", i + 1, ids.len()));
+        let text: String = sqlx::query_scalar("SELECT IFNULL(content, '') FROM documents WHERE id = ?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await?;
+        if name_scan(state, *id, title, &text).await? {
+            changed.push(*id);
+        }
+    }
+    if !changed.is_empty() {
+        task.phase("Suchindex");
+        state.reindex(&changed).await?;
+    }
+    tracing::info!("Scans nachträglich benannt: {} von {}", changed.len(), ids.len());
     Ok(())
 }
