@@ -179,3 +179,115 @@ fn error_text(code: i64) -> &'static str {
         _ => "unbekannter Fehler",
     }
 }
+
+/// Nach so vielen Fehlschlägen in Folge gilt Euro-Office als gestört: das
+/// Nachholen endet, ohne die Dokumente als nicht umwandelbar zu vermerken.
+const BACKFILL_MAX_FAILS: usize = 3;
+
+/// Nach dem Start: Office-Dateien ohne Vorschaubild nacheinander umwandeln
+/// (z. B. aus der Zeit vor der Office-Vorschau). Dateien, die Euro-Office
+/// nicht umwandeln kann, werden vermerkt und erst mit einer neuen Version
+/// wieder versucht.
+pub fn spawn_backfill(st: AppState) {
+    if st.config.office_url.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        let wait = |secs| {
+            let st = st.clone();
+            async move {
+                tokio::select! {
+                    _ = st.restart.cancelled() => false,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(secs)) => true,
+                }
+            }
+        };
+        // Erst die normale Verarbeitung nach dem Start durchlassen
+        if !wait(60).await {
+            return;
+        }
+        if let Err(e) = backfill(&st, wait).await {
+            tracing::warn!("Office-Vorschauen nachholen: {e:#}");
+        }
+    });
+}
+
+async fn backfill<W, F>(st: &AppState, wait: W) -> Result<()>
+where
+    W: Fn(u64) -> F,
+    F: std::future::Future<Output = bool>,
+{
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, extension FROM documents WHERE has_thumbnail = 0 AND extract_status = 'done' \
+         AND IFNULL(preview_failed_sha, '') <> sha256 ORDER BY updated_at DESC",
+    )
+    .fetch_all(&st.pool)
+    .await?;
+    let ids: Vec<i64> = rows.into_iter().filter(|(_, ext)| shared::office_previewable(ext)).map(|(id, _)| id).collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    // Adresse, unter der Euro-Office Büro erreicht: ohne BUERO_PUBLIC_URL
+    // erst nach der ersten angemeldeten Anfrage bekannt
+    let base = loop {
+        if let Some(b) = st.background_base() {
+            break b;
+        }
+        if !wait(30).await {
+            return Ok(());
+        }
+    };
+    tracing::info!("Office-Vorschauen nachholen: {} Dokumente", ids.len());
+    let task = crate::tasks::start("preview", "Office-Vorschauen nachholen", "", None);
+    let (mut made, mut failed) = (0usize, Vec::new());
+    for (i, id) in ids.iter().enumerate() {
+        if st.restart.is_cancelled() {
+            return Ok(());
+        }
+        let Some(doc) = crate::db::get_doc(&st.pool, *id).await? else { continue };
+        // Inzwischen anders erledigt (angesehen, neue Version in Arbeit)?
+        if doc.has_thumbnail || doc.extract_status != "done" {
+            continue;
+        }
+        task.retitle(format!("Office-Vorschau nachholen ({} von {}): {}", i + 1, ids.len(), doc.title), Some(doc.id));
+        let res = match ensure(st, &doc, &base, Some(&task)).await {
+            Ok(pdf) => make_thumbnail(st, &doc, &pdf).await,
+            Err(e) => Err(e),
+        };
+        match res {
+            // Vorschau da, aber kein Bild daraus: liegt an der Datei
+            Ok(false) => mark_failed(st, &mut vec![(doc.id, doc.sha256.clone())]).await,
+            Ok(true) => {
+                made += 1;
+                // Fehlschläge vor einem Erfolg lagen an den Dateien
+                mark_failed(st, &mut failed).await;
+            }
+            Err(e) => {
+                tracing::warn!("Keine PDF-Vorschau für {}: {e:#}", doc.id);
+                failed.push((doc.id, doc.sha256.clone()));
+                if failed.len() >= BACKFILL_MAX_FAILS {
+                    tracing::warn!("Office-Vorschauen nachholen abgebrochen: Euro-Office antwortet nicht wie erwartet");
+                    return Ok(());
+                }
+            }
+        }
+        // Euro-Office zwischendurch für die Bearbeitung frei lassen
+        if !wait(1).await {
+            return Ok(());
+        }
+    }
+    mark_failed(st, &mut failed).await;
+    tracing::info!("Office-Vorschauen nachgeholt: {made} von {}", ids.len());
+    Ok(())
+}
+
+async fn mark_failed(st: &AppState, failed: &mut Vec<(i64, String)>) {
+    for (id, sha) in failed.drain(..) {
+        let _ = sqlx::query("UPDATE documents SET preview_failed_sha = ? WHERE id = ? AND sha256 = ?")
+            .bind(&sha)
+            .bind(id)
+            .bind(&sha)
+            .execute(&st.pool)
+            .await;
+    }
+}

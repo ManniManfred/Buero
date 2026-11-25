@@ -103,6 +103,7 @@ async fn run(config: &config::Config) -> anyhow::Result<bool> {
     let worker = worker::spawn(state.clone(), rx);
     mail::spawn(state.clone());
     worker::requeue_pending(&state).await?;
+    preview::spawn_backfill(state.clone());
 
     let app = api::router(state.clone());
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;

@@ -47,6 +47,14 @@ impl Task {
         }
     }
 
+    /// Titel und zugehöriges Dokument ändern (Aufgaben über mehrere Dokumente)
+    pub fn retitle(&self, title: impl Into<String>, document_id: Option<i64>) {
+        if let Some(e) = TASKS.lock().unwrap().iter_mut().find(|e| e.task.id == self.0) {
+            e.task.title = title.into();
+            e.task.document_id = document_id;
+        }
+    }
+
     /// Schritt bei jeder Abfrage neu ermitteln (`None`: letzter Stand bleibt)
     pub fn live(self, f: impl Fn() -> Option<String> + Send + 'static) -> Self {
         if let Some(e) = TASKS.lock().unwrap().iter_mut().find(|e| e.task.id == self.0) {
