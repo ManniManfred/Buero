@@ -538,7 +538,7 @@ async fn delete_docs(st: &AppState, ids: &[i64]) -> AppResult<()> {
 
 #[derive(Deserialize)]
 pub struct DeleteParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_flag")]
     with_children: bool,
 }
 
@@ -602,7 +602,7 @@ pub async fn reprocess(State(st): State<AppState>, Path(id): Path<i64>) -> AppRe
 
 #[derive(Deserialize)]
 pub struct FileParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_flag")]
     download: bool,
     version: Option<i64>,
 }

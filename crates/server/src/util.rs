@@ -101,3 +101,39 @@ mod date_tests {
         assert_eq!(fmt_date(date_to_ts("2026-11-22").unwrap() + 86399), "2026-11-22");
     }
 }
+
+/// Tolerantes Bool für Query-Parameter: akzeptiert `1`/`0`, `true`/`false`,
+/// `yes`/`no`, `on`/`off` sowie einen leeren Wert (`?download`) als `true`.
+pub fn de_flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let s = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(d)?;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "" | "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(serde::de::Error::custom(format!("ungültiger Wahrheitswert: {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    #[derive(serde::Deserialize)]
+    struct P {
+        #[serde(default, deserialize_with = "super::de_flag")]
+        download: bool,
+    }
+
+    fn parse(v: &str) -> Result<bool, serde_json::Error> {
+        serde_json::from_str::<P>(&format!(r#"{{"download":"{v}"}}"#)).map(|p| p.download)
+    }
+
+    #[test]
+    fn flags() {
+        for v in ["1", "true", "TRUE", "yes", "on", ""] {
+            assert!(parse(v).unwrap(), "{v}");
+        }
+        for v in ["0", "false", "no", "off"] {
+            assert!(!parse(v).unwrap(), "{v}");
+        }
+        assert!(parse("vielleicht").is_err());
+        assert!(!serde_json::from_str::<P>("{}").unwrap().download);
+    }
+}

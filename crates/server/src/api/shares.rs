@@ -180,7 +180,7 @@ pub async fn delete(State(st): State<AppState>, Path(id): Path<i64>) -> AppResul
 #[derive(Deserialize, Default)]
 pub struct KeyParams {
     key: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_flag")]
     download: bool,
 }
 
