@@ -19,15 +19,16 @@
 //! - [`Filter`]: Rückrufe von Windows (Inhalt laden, Löschen/Umbenennen erlauben)
 //! - ein Hintergrund-Thread, der bei Änderungen und regelmäßig abgleicht
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cloud_filter::error::{CResult, CloudErrorKind};
 use cloud_filter::ext::FileExt;
@@ -213,7 +214,7 @@ pub fn mount(
         inbox: coll.is_none(),
         docs,
         wake: tx.clone(),
-        download: Mutex::new(()),
+        jobs: Arc::default(),
         log: log.clone(),
     };
     let connection = Session::new().connect(&root, filter).map_err(|e| format!("Sync-Ordner verbinden: {e}"))?;
@@ -546,7 +547,8 @@ pub struct Filter {
     /// Zwischenspeicher geladener Fassungen (`<id>-v<version>`)
     docs: PathBuf,
     wake: Sender<()>,
-    download: Mutex<()>,
+    /// Laufende Ladevorgänge je Fassung (`id`, `version`)
+    jobs: Jobs,
     log: SharedLog,
 }
 
@@ -573,27 +575,116 @@ impl Filter {
             })
     }
 
-    /// Fassung eines Dokuments im Zwischenspeicher bereitstellen
-    fn cached(&self, id: i64, version: i64) -> Result<PathBuf, String> {
+    /// Fassung eines Dokuments im Zwischenspeicher bereitstellen. Verschiedene
+    /// Dokumente laden parallel; fragt Windows dieselbe Fassung mehrfach an,
+    /// teilen sich die Anfragen einen Ladevorgang. `alive` wird beim Warten
+    /// regelmäßig mit den bisher empfangenen Bytes aufgerufen.
+    fn cached(&self, id: i64, version: i64, mut alive: impl FnMut(u64)) -> Result<PathBuf, String> {
         let path = self.docs.join(format!("{id}-v{version}"));
         if path.exists() {
             return Ok(path);
         }
-        let _d = self.download.lock().unwrap_or_else(|e| e.into_inner());
-        if path.exists() {
-            return Ok(path);
-        }
-        // Ältere Fassungen wegräumen
-        if let Ok(rd) = fs::read_dir(&self.docs) {
-            let prefix = format!("{id}-v");
-            for e in rd.flatten() {
-                if e.file_name().to_string_lossy().starts_with(&prefix) {
-                    let _ = fs::remove_file(e.path());
+        let key = (id, version);
+        let job = {
+            let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            if path.exists() {
+                return Ok(path);
+            }
+            match jobs.get(&key) {
+                Some(j) => j.clone(),
+                None => {
+                    let j = Arc::new(Job::default());
+                    jobs.insert(key, j.clone());
+                    if let Err(e) = self.start_download(key, &path, j.clone()) {
+                        jobs.remove(&key);
+                        return Err(e);
+                    }
+                    j
                 }
             }
+        };
+        let mut seen = 0;
+        let mut last = Instant::now();
+        let mut result = job.result.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(r) = result.as_ref() {
+                return r.clone().map(|_| path);
+            }
+            result = job.done.wait_timeout(result, KEEPALIVE).unwrap_or_else(|e| e.into_inner()).0;
+            if result.is_some() {
+                continue;
+            }
+            let bytes = job.bytes.load(Ordering::Relaxed);
+            if bytes != seen {
+                seen = bytes;
+                last = Instant::now();
+            } else if last.elapsed() >= STALL {
+                // Der Vorgang hängt: aufgeben, damit der nächste Versuch neu lädt
+                drop(result);
+                forget_job(&self.jobs, key, &job);
+                return Err(format!("Server antwortet seit {} s nicht", STALL.as_secs()));
+            }
+            alive(bytes);
         }
-        self.client.download(id, &path).map_err(text)?;
-        Ok(path)
+    }
+
+    /// Ladevorgang im Hintergrund starten; das Ergebnis landet in `job`
+    fn start_download(&self, key: (i64, i64), path: &Path, job: Arc<Job>) -> Result<(), String> {
+        let client = self.client.clone();
+        let docs = self.docs.clone();
+        let jobs = self.jobs.clone();
+        let path = path.to_path_buf();
+        std::thread::Builder::new()
+            .name("buero-download".into())
+            .spawn(move || {
+                let res = client.download_progress(key.0, &path, &job.bytes).map(|_| ()).map_err(text);
+                if res.is_ok() {
+                    remove_older(&docs, key.0, &path);
+                }
+                *job.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(res);
+                job.done.notify_all();
+                forget_job(&jobs, key, &job);
+            })
+            .map(|_| ())
+            .map_err(text)
+    }
+}
+
+/// So oft meldet sich ein wartender Rückruf bei Windows (sonst bricht Windows
+/// nach 60 s mit 0x800701AA ab)
+const KEEPALIVE: Duration = Duration::from_secs(10);
+/// Kommen so lange keine Daten an, gilt das Laden als gescheitert
+const STALL: Duration = Duration::from_secs(90);
+
+/// Laufende Ladevorgänge je Fassung
+type Jobs = Arc<Mutex<HashMap<(i64, i64), Arc<Job>>>>;
+
+/// Ein laufender Ladevorgang, auf den eine oder mehrere Anfragen warten
+#[derive(Default)]
+struct Job {
+    bytes: AtomicU64,
+    result: Mutex<Option<Result<(), String>>>,
+    done: Condvar,
+}
+
+/// Ladevorgang austragen – nur, wenn nicht schon ein neuerer eingetragen ist
+fn forget_job(jobs: &Jobs, key: (i64, i64), job: &Arc<Job>) {
+    let mut jobs = jobs.lock().unwrap_or_else(|e| e.into_inner());
+    if jobs.get(&key).is_some_and(|j| Arc::ptr_eq(j, job)) {
+        jobs.remove(&key);
+    }
+}
+
+/// Ältere Fassungen eines Dokuments aus dem Zwischenspeicher räumen
+fn remove_older(docs: &Path, id: i64, keep: &Path) {
+    let Ok(rd) = fs::read_dir(docs) else { return };
+    let prefix = format!("{id}-v");
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        // `.part…`: gehört zu einem noch laufenden Vorgang
+        if name.starts_with(&prefix) && !name.contains(".part") && e.path() != keep {
+            let _ = fs::remove_file(e.path());
+        }
     }
 }
 
@@ -602,7 +693,12 @@ impl SyncFilter for Filter {
         let Some(Meta::Doc { id, version, .. }) = Meta::from_blob(request.file_blob()) else {
             return Err(CloudErrorKind::InvalidRequest);
         };
-        let path = self.cached(id, version).map_err(|e| {
+        let size = request.file_size();
+        let alive = |bytes: u64| {
+            // Hält Windows hin, solange noch geladen wird
+            let _ = ticket.report_progress(size, bytes.min(size));
+        };
+        let path = self.cached(id, version, alive).map_err(|e| {
             log::warn!("Büro-Sync: Laden fehlgeschlagen: {e}");
             self.note(ActKind::Error, &request.path(), format!("Laden fehlgeschlagen: {e}"));
             CloudErrorKind::NetworkUnavailable

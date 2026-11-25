@@ -5,6 +5,7 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -32,6 +33,20 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 fn net(e: impl std::fmt::Display) -> ApiError {
     ApiError { status: None, message: format!("Server nicht erreichbar: {e}") }
+}
+
+/// Leser, der die gelesenen Bytes mitzählt
+struct Counting<'a, R> {
+    inner: R,
+    count: &'a AtomicU64,
+}
+
+impl<R: Read> Read for Counting<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.count.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(n)
+    }
 }
 
 #[derive(Clone)]
@@ -142,12 +157,29 @@ impl Client {
     /// Lädt die aktuelle Fassung eines Dokuments nach `dest` (über eine
     /// temporäre Datei, damit nie eine halbe Datei liegen bleibt).
     pub fn download(&self, id: i64, dest: &Path) -> ApiResult<u64> {
-        let r = self.auth(self.agent.get(&self.url(&format!("/api/documents/{id}/file")))).call();
-        let mut r = Self::check(r)?;
-        let tmp = dest.with_extension("part");
+        self.download_progress(id, dest, &AtomicU64::new(0))
+    }
+
+    /// Wie [`Client::download`]; `received` zählt die bisher empfangenen Bytes
+    /// mit (wer wartet, sieht daran, ob es noch vorangeht).
+    pub fn download_progress(&self, id: i64, dest: &Path, received: &AtomicU64) -> ApiResult<u64> {
+        static PART: AtomicU64 = AtomicU64::new(0);
+        let req = self
+            .agent
+            .get(&self.url(&format!("/api/documents/{id}/file")))
+            .config()
+            // Hängt die Verbindung, nicht ewig warten
+            .timeout_recv_response(Some(Duration::from_secs(60)))
+            .timeout_recv_body(Some(Duration::from_secs(3600)))
+            .build();
+        let mut r = Self::check(self.auth(req).call())?;
+        // Eigener Name je Vorgang: ein abgebrochener, noch hängender Vorgang
+        // kommt einem neuen nicht in die Quere
+        let part = PART.fetch_add(1, Ordering::Relaxed);
+        let tmp = dest.with_extension(format!("part{}-{part}", std::process::id()));
         let io = |e: std::io::Error| ApiError { status: None, message: format!("Lokale Datei: {e}") };
         let mut f = std::fs::File::create(&tmp).map_err(io)?;
-        let mut reader = r.body_mut().with_config().limit(u64::MAX).reader();
+        let mut reader = Counting { inner: r.body_mut().with_config().limit(u64::MAX).reader(), count: received };
         let n = std::io::copy(&mut reader, &mut f).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             net(e)
