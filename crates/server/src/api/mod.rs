@@ -24,7 +24,7 @@ mod mail;
 mod mcp;
 mod desktop;
 pub(crate) mod documents;
-mod office;
+pub(crate) mod office;
 mod shares;
 mod tags;
 
@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/documents/{id}/file", get(documents::file))
         .route("/api/documents/{id}/thumbnail", get(documents::thumbnail))
+        .route("/api/documents/{id}/preview", get(documents::preview))
         .route("/api/documents/{id}/text", get(documents::text))
         .route("/api/documents/{id}/versions", post(documents::new_version))
         .route("/api/documents/{id}/reprocess", post(documents::reprocess))

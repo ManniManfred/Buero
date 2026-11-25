@@ -360,7 +360,10 @@ pub fn signed_access(st: &AppState, req: &Request) -> bool {
     let path = req.uri().path();
     let query = req.uri().query().unwrap_or("");
     let file_path = path.starts_with("/api/documents/")
-        && (path.ends_with("/file") || path.ends_with("/thumbnail") || path.ends_with("/text"));
+        && (path.ends_with("/file")
+            || path.ends_with("/thumbnail")
+            || path.ends_with("/preview")
+            || path.ends_with("/text"));
     if file_path && query_param(query, "fk").is_some_and(|k| check_file_key(st, k)) {
         return true;
     }

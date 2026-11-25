@@ -52,10 +52,14 @@ pub async fn require_auth(
     next: Next,
 ) -> Result<Response, AppError> {
     if state.config.password.is_none() {
+        state.remember_base(req.headers());
         return Ok(next.run(req).await);
     }
     match token_from_request(&req) {
-        Some(t) if is_valid(&state, &t).await => Ok(next.run(req).await),
+        Some(t) if is_valid(&state, &t).await => {
+            state.remember_base(req.headers());
+            Ok(next.run(req).await)
+        }
         _ if crate::security::signed_access(&state, &req) => Ok(next.run(req).await),
         _ => Err(AppError::unauthorized()),
     }

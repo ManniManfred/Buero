@@ -19,6 +19,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(windows)]
+mod scan;
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -490,6 +493,27 @@ async fn document_open(
     app.opener().open_path(file.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Vom Scanner holen: über den Einzug alle eingelegten Blätter (`duplex`:
+/// beidseitig, leere Rückseiten fallen weg), beim Flachbett eine Seite über
+/// den Scan-Dialog von Windows. Liefert die Bilder als Binärpaket (siehe
+/// `scan::Scanned::encode`).
+#[tauri::command]
+async fn scan_acquire(app: tauri::AppHandle, duplex: bool) -> Result<tauri::ipc::Response, String> {
+    #[cfg(windows)]
+    {
+        let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("scan");
+        let scanned = tauri::async_runtime::spawn_blocking(move || scan::acquire(&dir, duplex))
+            .await
+            .map_err(|e| e.to_string())??;
+        Ok(tauri::ipc::Response::new(scanned.encode()))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, duplex);
+        Err("Scannen mit dem Scanner ist nur unter Windows möglich.".into())
+    }
+}
+
 /// Dateiname ohne Zeichen, die Windows nicht erlaubt
 fn safe_file_name(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
@@ -787,6 +811,7 @@ fn main() {
             drive_sync,
             drive_open,
             document_open,
+            scan_acquire,
             folder_add,
             folder_remove,
             update_check,

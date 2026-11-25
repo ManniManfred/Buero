@@ -38,6 +38,9 @@ pub struct Inner {
     pub share_limit: crate::security::Limiter,
     /// Uploads pro Freigabelink und Stunde
     pub share_uploads: crate::security::UploadCounter,
+    /// Basis-Adresse der letzten angemeldeten Anfrage – für Hintergrundaufträge,
+    /// die Euro-Office einen Link auf Büro geben müssen (ohne `BUERO_PUBLIC_URL`)
+    pub seen_base: std::sync::RwLock<Option<String>>,
 }
 
 impl std::ops::Deref for AppState {
@@ -58,6 +61,22 @@ impl AppState {
         let host = h("x-forwarded-host").or_else(|| h("host")).unwrap_or_else(|| "localhost".into());
         let proto = h("x-forwarded-proto").unwrap_or_else(|| "http".into());
         format!("{proto}://{host}")
+    }
+
+    /// Merkt sich die Basis-Adresse einer angemeldeten Anfrage.
+    pub fn remember_base(&self, headers: &axum::http::HeaderMap) {
+        if self.config.public_url.is_some() || self.config.office_url.is_none() {
+            return;
+        }
+        let base = self.public_base(headers);
+        if self.seen_base.read().unwrap().as_deref() != Some(base.as_str()) {
+            *self.seen_base.write().unwrap() = Some(base);
+        }
+    }
+
+    /// Basis-Adresse für Hintergrundaufträge (falls bekannt)
+    pub fn background_base(&self) -> Option<String> {
+        self.config.public_url.clone().or_else(|| self.seen_base.read().unwrap().clone())
     }
 
     /// Indexeinträge der Dokumente neu schreiben und sofort sichtbar machen.

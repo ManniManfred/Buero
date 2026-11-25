@@ -151,7 +151,7 @@ fn storage_usage(data_dir: &Path) -> StorageUsage {
         let size = dir_size(&e.path());
         let slot = match name.as_str() {
             "files" => &mut u.files,
-            "thumbs" => &mut u.thumbnails,
+            "thumbs" | "previews" => &mut u.thumbnails,
             "index" => &mut u.index,
             n if n.starts_with("buero.db") => &mut u.database,
             _ => &mut u.other,

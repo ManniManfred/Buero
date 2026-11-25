@@ -24,7 +24,7 @@ pub struct StagedFile {
 
 impl Storage {
     pub async fn new(root: &Path) -> std::io::Result<Self> {
-        for d in ["files", "thumbs", "tmp"] {
+        for d in ["files", "thumbs", "previews", "tmp"] {
             tokio::fs::create_dir_all(root.join(d)).await?;
         }
         // Reste abgebrochener Uploads entfernen
@@ -42,6 +42,11 @@ impl Storage {
 
     pub fn thumb_path(&self, doc_id: i64) -> PathBuf {
         self.root.join("thumbs").join(format!("{doc_id}.jpg"))
+    }
+
+    /// PDF-Vorschau einer Office-Datei (Zwischenspeicher, je Dateiinhalt)
+    pub fn preview_path(&self, sha: &str) -> PathBuf {
+        self.root.join("previews").join(format!("{sha}.pdf"))
     }
 
     pub fn tmp_dir(&self) -> PathBuf {
@@ -105,5 +110,6 @@ impl Storage {
 
     pub async fn remove(&self, sha: &str) {
         let _ = tokio::fs::remove_file(self.file_path(sha)).await;
+        let _ = tokio::fs::remove_file(self.preview_path(sha)).await;
     }
 }

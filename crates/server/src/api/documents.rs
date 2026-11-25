@@ -691,6 +691,47 @@ pub async fn thumbnail(
     Ok(res)
 }
 
+/// PDF-Vorschau einer Office-Datei (über Euro-Office, beim ersten Abruf erzeugt)
+pub async fn preview(State(st): State<AppState>, Path(id): Path<i64>, req: Request) -> AppResult<Response> {
+    let doc = db::get_doc(&st.pool, id).await?.ok_or_else(AppError::not_found)?;
+    if !crate::preview::available(&st, &doc) {
+        return Err(AppError::not_found());
+    }
+    let base = st.public_base(req.headers());
+    let ancestors = HeaderValue::from_str(&crate::security::file_frame_ancestors()).ok();
+    let mut res = match crate::preview::ensure(&st, &doc, &base).await {
+        Ok(pdf) => {
+            // Vorschaubild nachholen (z. B. bei älteren Dokumenten)
+            if !doc.has_thumbnail {
+                let (st2, doc2, pdf2) = (st.clone(), doc.clone(), pdf.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = crate::preview::make_thumbnail(&st2, &doc2, &pdf2).await {
+                        tracing::warn!("Kein Vorschaubild für {}: {e:#}", doc2.id);
+                    }
+                });
+            }
+            let mut res = serve(pdf, "application/pdf", req).await?;
+            res.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
+            res
+        }
+        Err(e) => {
+            tracing::warn!("Keine PDF-Vorschau für {id}: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                format!("Vorschau konnte nicht erzeugt werden.\n\n{e:#}"),
+            )
+                .into_response()
+        }
+    };
+    res.headers_mut().insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    if let Some(v) = ancestors {
+        res.headers_mut().insert(header::CONTENT_SECURITY_POLICY, v);
+    }
+    Ok(res)
+}
+
 pub(crate) async fn serve(path: std::path::PathBuf, mime: &str, req: Request) -> AppResult<Response> {
     let mime = mime.parse().unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM);
     let res = match ServeFile::new_with_mime(path, &mime).oneshot(req).await {

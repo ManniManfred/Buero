@@ -17,6 +17,60 @@ use crate::icons::Icon;
 use crate::state::{ctx, Ctx};
 
 const VIDEO_ID: &str = "scan-video";
+/// Merkt sich „Beidseitig“ (Desktop-Client, Scanner mit Einzug)
+const KEY_DUPLEX: &str = "buero.scan.duplex";
+
+/// Antwort des Desktop-Clients auf `scan_acquire`
+struct Scanned {
+    pages: Vec<web_sys::Blob>,
+    blank: u32,
+    warning: Option<String>,
+}
+
+/// Binärpaket lesen: `BSCN`, Seitenzahl, je Seite Länge + Daten, Anzahl
+/// leerer Seiten, Hinweis (UTF-8); Zahlen als u32 (LE)
+fn decode_scan(buf: &js_sys::ArrayBuffer) -> Option<Scanned> {
+    let all = js_sys::Uint8Array::new(buf);
+    let len = all.length();
+    let num = |o: u32| -> Option<u32> {
+        (o + 4 <= len).then(|| {
+            let mut b = [0u8; 4];
+            all.subarray(o, o + 4).copy_to(&mut b);
+            u32::from_le_bytes(b)
+        })
+    };
+    let mut magic = [0u8; 4];
+    if len < 8 {
+        return None;
+    }
+    all.subarray(0, 4).copy_to(&mut magic);
+    if &magic != b"BSCN" {
+        return None;
+    }
+    let count = num(4)?;
+    let mut o = 8u32;
+    let mut pages = Vec::new();
+    for _ in 0..count {
+        let n = num(o)?;
+        o += 4;
+        if o.checked_add(n)? > len {
+            return None;
+        }
+        let part = all.subarray(o, o + n);
+        pages.push(web_sys::Blob::new_with_u8_array_sequence(&js_sys::Array::of1(&part)).ok()?);
+        o += n;
+    }
+    let blank = num(o)?;
+    let wl = num(o + 4)?;
+    let start = o + 8;
+    if start.checked_add(wl)? > len {
+        return None;
+    }
+    let mut w = vec![0u8; wl as usize];
+    all.subarray(start, start + wl).copy_to(&mut w);
+    let warning = String::from_utf8(w).ok().filter(|w| !w.is_empty());
+    Some(Scanned { pages, blank, warning })
+}
 
 #[wasm_bindgen(inline_js = r#"
 let stream = null;
@@ -576,7 +630,10 @@ pub fn Scanner() -> impl IntoView {
         busy: RwSignal::new(0),
     };
     let pages = s.pages;
-    let mode = RwSignal::new(Mode::Camera);
+    // Desktop-Client: Scanner (Windows-Scan-Dialog) statt Kamera als Standard
+    let desktop = crate::api::is_desktop();
+    let mode = RwSignal::new(if desktop { Mode::Pages } else { Mode::Camera });
+    let scanning = RwSignal::new(false);
     let cam_err = RwSignal::new(None::<String>);
     let cam_ready = RwSignal::new(false);
     let flash = RwSignal::new(false);
@@ -643,6 +700,42 @@ pub fn Scanner() -> impl IntoView {
                 Ok(b) => s.add(b.unchecked_into()).await,
                 Err(e) => c.notify(e, true),
             }
+            s.busy.try_update(|b| *b = b.saturating_sub(1));
+        });
+    };
+
+    // Vom Scanner (Desktop-Client): Einzug Blatt für Blatt, Flachbett über
+    // den Scan-Dialog von Windows
+    let duplex = RwSignal::new(crate::api::load(KEY_DUPLEX).as_deref() == Some("1"));
+    let from_scanner = move || {
+        if scanning.get_untracked() {
+            return;
+        }
+        scanning.set(true);
+        s.busy.update(|b| *b += 1);
+        let args = serde_json::json!({ "duplex": duplex.get_untracked() });
+        spawn_local(async move {
+            match crate::api::invoke_js("scan_acquire", args).await {
+                Ok(v) => match v.dyn_into::<js_sys::ArrayBuffer>().ok().and_then(|b| decode_scan(&b)) {
+                    Some(r) => {
+                        if !r.pages.is_empty() {
+                            mode.try_set(Mode::Pages);
+                        }
+                        for p in r.pages {
+                            s.add(p).await;
+                        }
+                        if let Some(w) = r.warning {
+                            c.notify(w, true);
+                        } else if r.blank > 0 {
+                            let what = if r.blank == 1 { "1 leere Seite".to_string() } else { format!("{} leere Seiten", r.blank) };
+                            c.notify(format!("{what} weggelassen."), false);
+                        }
+                    }
+                    None => c.notify("Unerwartete Antwort vom Scanner.", true),
+                },
+                Err(e) => c.notify(e, true),
+            }
+            scanning.try_set(false);
             s.busy.try_update(|b| *b = b.saturating_sub(1));
         });
     };
@@ -754,7 +847,7 @@ pub fn Scanner() -> impl IntoView {
                     <button class="shutter" title="Aufnehmen" aria-label="Aufnehmen"
                         disabled=move || !cam_ready.get() on:click=move |_| capture()></button>
                     <button class="scan-side scan-next" title="Seiten ansehen und speichern"
-                        disabled=move || page_count() == 0 on:click=move |_| mode.set(Mode::Pages)>
+                        disabled=move || !desktop && page_count() == 0 on:click=move |_| mode.set(Mode::Pages)>
                         {move || pages.with(|ps| ps.last().and_then(|p| p.out.clone())).map(|(u, ..)| view! { <img src=u alt="" /> })}
                         <span class="scan-count">{page_count}</span>
                     </button>
@@ -801,9 +894,33 @@ pub fn Scanner() -> impl IntoView {
                                 }
                             }
                         </For>
-                        <button class="scan-add" on:click=move |_| mode.set(Mode::Camera)>
-                            <Icon name="plus" />"Seite hinzufügen"
-                        </button>
+                        {if desktop {
+                            view! {
+                                <button class="scan-add" disabled=move || scanning.get() on:click=move |_| from_scanner()>
+                                    <Icon name="scanner" />
+                                    {move || if scanning.get() { "Scanner läuft …" } else if page_count() == 0 { "Vom Scanner scannen" } else { "Weiter scannen" }}
+                                </button>
+                                <div class="scan-add-more">
+                                    <label class="scan-check" title="Bei Scannern mit Einzug auch die Rückseiten scannen; leere Rückseiten fallen weg">
+                                        <input type="checkbox" prop:checked=move || duplex.get()
+                                            on:change=move |ev| {
+                                                let on = event_target_checked(&ev);
+                                                duplex.set(on);
+                                                crate::api::save(KEY_DUPLEX, on.then_some("1"));
+                                            } />
+                                        "Beidseitig"
+                                    </label>
+                                    <button on:click=move |_| mode.set(Mode::Camera)><Icon name="camera" />"Kamera"</button>
+                                    <button on:click=move |_| { if let Some(i) = gallery.get() { i.click(); } }><Icon name="image-plus" />"Bilder wählen"</button>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <button class="scan-add" on:click=move |_| mode.set(Mode::Camera)>
+                                    <Icon name="plus" />"Seite hinzufügen"
+                                </button>
+                            }.into_any()
+                        }}
                     </div>
                     <div class="scan-foot">
                         <input class="grow" type="text" placeholder="Titel" aria-label="Titel"

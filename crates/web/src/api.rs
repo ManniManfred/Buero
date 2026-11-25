@@ -231,6 +231,19 @@ pub fn window_action(method: &str) {
 /// Befehl des Desktop-Clients (Tauri) aufrufen.
 pub async fn invoke<T: DeserializeOwned>(cmd: &str, args: serde_json::Value) -> Result<T, String> {
     let js_err = |e: wasm_bindgen::JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
+    let v = invoke_js(cmd, args).await?;
+    let text = if v.is_undefined() {
+        "null".to_string()
+    } else {
+        js_sys::JSON::stringify(&v).map_err(js_err)?.as_string().unwrap_or_else(|| "null".into())
+    };
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// Befehl des Desktop-Clients aufrufen, Ergebnis unverändert (z. B. ein
+/// `ArrayBuffer` bei Binärdaten)
+pub async fn invoke_js(cmd: &str, args: serde_json::Value) -> Result<wasm_bindgen::JsValue, String> {
+    let js_err = |e: wasm_bindgen::JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
     let w = web_sys::window().ok_or("Kein Fenster")?;
     let core = js_sys::Reflect::get(&w, &"__TAURI__".into())
         .and_then(|t| js_sys::Reflect::get(&t, &"core".into()))
@@ -241,11 +254,5 @@ pub async fn invoke<T: DeserializeOwned>(cmd: &str, args: serde_json::Value) -> 
         .map_err(|_| "Nur im Desktop-Client verfügbar".to_string())?;
     let args = js_sys::JSON::parse(&args.to_string()).map_err(js_err)?;
     let promise = f.call2(&core, &cmd.into(), &args).map_err(js_err)?.dyn_into::<js_sys::Promise>().map_err(js_err)?;
-    let v = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(js_err)?;
-    let text = if v.is_undefined() {
-        "null".to_string()
-    } else {
-        js_sys::JSON::stringify(&v).map_err(js_err)?.as_string().unwrap_or_else(|| "null".into())
-    };
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+    wasm_bindgen_futures::JsFuture::from(promise).await.map_err(js_err)
 }

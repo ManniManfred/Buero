@@ -165,6 +165,9 @@ fn DetailBody(
     let kind = s.kind.clone();
     let mime = s.mime.clone();
     let previewable = kind == "pdf" || kind == "image" || mime.starts_with("text/") || mime == "application/json";
+    // Office-Dateien: PDF-Vorschau, die Euro-Office erzeugt
+    let office_preview = shared::office_previewable(shared::extension_of(&s.original_filename));
+    let office_preview_url = c.api.file_url(&format!("/api/documents/{id}/preview?v={}", s.version));
 
     let title = RwSignal::new(s.title.clone());
     let date = RwSignal::new(s.document_date.clone().unwrap_or_default());
@@ -204,6 +207,8 @@ fn DetailBody(
                         view! { <crate::components::editor::MarkdownView id=id version=version /> }.into_any()
                     } else if previewable {
                         view! { <iframe class="preview" src=file_url.clone()></iframe> }.into_any()
+                    } else if office_preview && c.features.get().office {
+                        view! { <iframe class="preview" src=office_preview_url.clone()></iframe> }.into_any()
                     } else {
                         view! {
                             <div class="preview none">

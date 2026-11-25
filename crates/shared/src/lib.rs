@@ -459,6 +459,12 @@ pub fn office_document_type(extension: &str) -> Option<&'static str> {
     })
 }
 
+/// Dateiendungen, für die Euro-Office eine PDF-Vorschau erzeugt (Text und CSV
+/// zeigt die Oberfläche direkt an)
+pub fn office_previewable(extension: &str) -> bool {
+    office_document_type(extension).is_some() && !matches!(extension.to_ascii_lowercase().as_str(), "txt" | "csv")
+}
+
 /// Dateiendungen, die Euro-Office bearbeiten und im selben Format speichern kann
 pub fn office_editable(extension: &str) -> bool {
     matches!(

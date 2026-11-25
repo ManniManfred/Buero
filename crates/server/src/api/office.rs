@@ -72,9 +72,7 @@ pub async fn config(
     };
 
     let base = st.public_base(&headers);
-    let exp = now() + FILE_LINK_SECS;
-    let file_sig = sign::sign(&st.secret, &format!("office-file:{id}:{}:{exp}", doc.version));
-    let file_url = format!("{base}/api/office/file/{id}?v={}&exp={exp}&sig={file_sig}", doc.version);
+    let file_url = file_link(&st, &base, id, doc.version);
     let cb_sig = sign::sign(&st.secret, &format!("office-cb:{id}"));
     let callback_url = format!("{base}/api/office/callback/{id}?sig={cb_sig}");
 
@@ -119,6 +117,14 @@ pub async fn config(
         config: cfg.to_string(),
         can_edit,
     }))
+}
+
+/// Signierter, zeitlich begrenzter Link, über den der Document Server eine
+/// Fassung des Dokuments abholt
+pub(crate) fn file_link(st: &AppState, base: &str, id: i64, version: i64) -> String {
+    let exp = now() + FILE_LINK_SECS;
+    let sig = sign::sign(&st.secret, &format!("office-file:{id}:{version}:{exp}"));
+    format!("{base}/api/office/file/{id}?v={version}&exp={exp}&sig={sig}")
 }
 
 #[derive(Deserialize)]

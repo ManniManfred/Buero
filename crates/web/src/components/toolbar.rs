@@ -60,7 +60,8 @@ pub fn SearchRow() -> impl IntoView {
                 <option value="date_desc">"Dokumentdatum ↓"</option>
                 <option value="date_asc">"Dokumentdatum ↑"</option>
             </select>
-            <button title="Dokument mit der Kamera scannen" on:click=move |_| c.scan.set(true)>
+            <button title=if crate::api::is_desktop() { "Dokument mit dem Scanner oder der Kamera scannen" } else { "Dokument mit der Kamera scannen" }
+                on:click=move |_| c.scan.set(true)>
                 <Icon name="camera" /><span class="btn-text">"Scannen"</span>
             </button>
             <button title="Neues Dokument anlegen (Word, Excel, Text, Markdown, …)" on:click=move |_| crate::components::editor::new_document(c)>

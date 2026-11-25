@@ -24,6 +24,10 @@ serde_json.workspace = true
 buero-vfs = { path = "../vfs" }
 tokio = { version = "1", features = ["sync"] }
 
+[target.'cfg(windows)'.dependencies]
+# Scannen über die Windows-Bilderfassung (WIA, Automatisierung über IDispatch)
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_Variant"] }
+
 [features]
 # Von der Tauri-CLI im Release-Build gesetzt
 custom-protocol = ["tauri/custom-protocol"]

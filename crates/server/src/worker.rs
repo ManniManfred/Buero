@@ -83,13 +83,31 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
     };
 
     let thumb = state.storage.thumb_path(id);
-    let has_thumb = match extract::thumbnail(&path, &doc.extension, &thumb, &state.storage.tmp_dir()).await {
+    let mut has_thumb = match extract::thumbnail(&path, &doc.extension, &thumb, &state.storage.tmp_dir()).await {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!("Kein Vorschaubild für {id}: {e:#}");
             false
         }
     };
+    // Office-Dateien: PDF-Vorschau über Euro-Office, daraus das Vorschaubild.
+    // Ohne bekannte Adresse (kein BUERO_PUBLIC_URL, noch keine Anfrage seit dem
+    // Start) entsteht sie beim ersten Ansehen.
+    if !has_thumb && crate::preview::available(state, &doc) {
+        if let Some(base) = state.background_base() {
+            match crate::preview::ensure(state, &doc, &base).await {
+                Ok(pdf) => {
+                    has_thumb = extract::thumbnail(&pdf, "pdf", &thumb, &state.storage.tmp_dir())
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Kein Vorschaubild für {id}: {e:#}");
+                            false
+                        })
+                }
+                Err(e) => tracing::warn!("Keine PDF-Vorschau für {id}: {e:#}"),
+            }
+        }
+    }
 
     // Datei könnte während der Verarbeitung ersetzt worden sein (neue Version)
     let current: Option<String> = sqlx::query_scalar("SELECT sha256 FROM documents WHERE id = ?")
@@ -112,6 +130,11 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
     .execute(&state.pool)
     .await?;
 
+    if err.is_none() && crate::autotitle::scannable(&doc.extension) && crate::autotitle::is_scan_name(&doc.title) {
+        if let Err(e) = name_scan(state, &doc, &text).await {
+            tracing::warn!("Kein Titel aus dem Inhalt für {id}: {e:#}");
+        }
+    }
     if doc.extension.eq_ignore_ascii_case("eml") {
         if let Err(e) = crate::email::register(state, id).await {
             tracing::warn!("E-Mail {id} nicht vollständig erfasst: {e:#}");
@@ -123,5 +146,33 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
         text.len(),
         started.elapsed()
     );
+    Ok(())
+}
+
+/// Scan mit automatischem Namen: Titel und Datum aus dem Inhalt. Der Titel
+/// wird nur ersetzt, wenn ihn niemand inzwischen geändert hat, das Datum nur,
+/// wenn noch keins gesetzt ist.
+async fn name_scan(state: &AppState, doc: &crate::db::DocRow, text: &str) -> anyhow::Result<()> {
+    let today = crate::util::fmt_date(crate::util::now());
+    let guess = crate::autotitle::guess(text, &today);
+    if let Some(t) = &guess.title {
+        let done = sqlx::query("UPDATE documents SET title = ?, updated_at = ? WHERE id = ? AND title = ?")
+            .bind(t)
+            .bind(crate::util::now())
+            .bind(doc.id)
+            .bind(&doc.title)
+            .execute(&state.pool)
+            .await?;
+        if done.rows_affected() > 0 {
+            tracing::info!("Dokument {}: Titel „{t}“ aus dem Inhalt", doc.id);
+        }
+    }
+    if let Some(d) = &guess.date {
+        sqlx::query("UPDATE documents SET document_date = ? WHERE id = ? AND IFNULL(document_date, '') = ''")
+            .bind(d)
+            .bind(doc.id)
+            .execute(&state.pool)
+            .await?;
+    }
     Ok(())
 }

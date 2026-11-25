@@ -4,6 +4,7 @@
 //! Büro – Dokumentenverwaltung: HTTP-Server
 
 mod api;
+mod autotitle;
 mod auth;
 mod config;
 mod db;
@@ -11,6 +12,7 @@ mod email;
 mod error;
 mod extract;
 mod mail;
+mod preview;
 mod search;
 mod security;
 mod sign;
@@ -89,6 +91,7 @@ async fn run(config: &config::Config) -> anyhow::Result<bool> {
             login_limit: security::Limiter::new("Anmeldung"),
             share_limit: security::Limiter::new("Freigabe-Passwort"),
             share_uploads: Default::default(),
+            seen_base: Default::default(),
         }),
     };
 

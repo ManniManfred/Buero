@@ -1,0 +1,169 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Manfred Roßkamp
+
+//! PDF-Vorschau für Office-Dateien (Word, Excel, PowerPoint, OpenDocument …)
+//! über den Umwandlungsdienst von Euro-Office (`ConvertService.ashx`).
+//!
+//! Der Document Server holt die Datei über denselben signierten Link wie beim
+//! Bearbeiten ab und liefert ein PDF, das Büro je Dateiinhalt zwischenspeichert
+//! (`previews/<sha256>.pdf`). Daraus entsteht auch das Vorschaubild.
+
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use anyhow::{bail, Context, Result};
+use axum::http::header;
+use futures_util::TryStreamExt;
+use serde_json::{json, Value};
+
+use crate::db::DocRow;
+use crate::state::AppState;
+
+/// Längste Wartezeit auf eine Umwandlung
+const CONVERT_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Immer nur eine Umwandlung gleichzeitig – schont den Document Server, etwa
+/// beim Übernehmen vieler Dateien
+static CONVERT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Kann für dieses Dokument eine PDF-Vorschau erzeugt werden?
+pub fn available(st: &AppState, doc: &DocRow) -> bool {
+    st.config.office_url.is_some() && shared::office_previewable(&doc.extension)
+}
+
+/// Liefert die PDF-Vorschau des Dokuments und erzeugt sie bei Bedarf.
+/// `base`: Adresse, unter der der Document Server Büro erreicht.
+pub async fn ensure(st: &AppState, doc: &DocRow, base: &str) -> Result<PathBuf> {
+    let path = st.storage.preview_path(&doc.sha256);
+    if exists(&path).await {
+        return Ok(path);
+    }
+    let _guard = CONVERT_LOCK.lock().await;
+    // Inzwischen von einer anderen Anfrage erzeugt?
+    if exists(&path).await {
+        return Ok(path);
+    }
+    let started = Instant::now();
+    let url = convert(st, doc, base).await?;
+    download(st, &url, &path).await?;
+    tracing::info!("PDF-Vorschau für Dokument {} erzeugt in {:.1?}", doc.id, started.elapsed());
+    Ok(path)
+}
+
+/// Vorschaubild aus der PDF-Vorschau erzeugen (nur, solange das Dokument
+/// noch denselben Inhalt hat)
+pub async fn make_thumbnail(st: &AppState, doc: &DocRow, pdf: &std::path::Path) -> Result<bool> {
+    let thumb = st.storage.thumb_path(doc.id);
+    if !crate::extract::thumbnail(pdf, "pdf", &thumb, &st.storage.tmp_dir()).await? {
+        return Ok(false);
+    }
+    let r = sqlx::query("UPDATE documents SET has_thumbnail = 1 WHERE id = ? AND sha256 = ?")
+        .bind(doc.id)
+        .bind(&doc.sha256)
+        .execute(&st.pool)
+        .await?;
+    Ok(r.rows_affected() > 0)
+}
+
+async fn exists(path: &std::path::Path) -> bool {
+    tokio::fs::try_exists(path).await.unwrap_or(false)
+}
+
+/// Lässt den Document Server umwandeln und liefert die Adresse des PDFs.
+async fn convert(st: &AppState, doc: &DocRow, base: &str) -> Result<String> {
+    let office = st.config.office_url.as_deref().context("Euro-Office ist nicht eingerichtet")?;
+    let ext = doc.extension.to_ascii_lowercase();
+    let mut body = json!({
+        "async": true,
+        "filetype": ext,
+        // Gleicher Inhalt → gleicher Schlüssel (der Document Server merkt sich Ergebnisse)
+        "key": format!("pv-{}", &doc.sha256[..40.min(doc.sha256.len())]),
+        "outputtype": "pdf",
+        "title": doc.original_filename,
+        "url": crate::api::office::file_link(st, base, doc.id, doc.version),
+    });
+    if shared::office_document_type(&ext) == Some("cell") {
+        // Breite Tabellen auf Seitenbreite verkleinern statt auf viele Seiten zu verteilen
+        body["spreadsheetLayout"] = json!({ "fitToWidth": 1, "fitToHeight": 0 });
+    }
+    if let Some(secret) = &st.config.office_jwt_secret {
+        body["token"] = Value::String(crate::sign::jwt_encode(secret, &body));
+    }
+
+    let endpoint = format!("{office}/ConvertService.ashx");
+    let deadline = Instant::now() + CONVERT_TIMEOUT;
+    loop {
+        let res: Value = st
+            .http
+            .post(&endpoint)
+            .header(header::ACCEPT, "application/json")
+            .json(&body)
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+            .context("Euro-Office nicht erreichbar")?
+            .json()
+            .await
+            .context("Unerwartete Antwort von Euro-Office")?;
+        if let Some(code) = res.get("error").and_then(Value::as_i64) {
+            bail!("Euro-Office: {} (Fehler {code})", error_text(code));
+        }
+        if res.get("endConvert").and_then(Value::as_bool) == Some(true) {
+            return res
+                .get("fileUrl")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .context("Euro-Office lieferte keine Datei-Adresse");
+        }
+        if Instant::now() > deadline {
+            bail!("Euro-Office: Umwandlung dauert zu lange");
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn download(st: &AppState, url: &str, dest: &std::path::Path) -> Result<()> {
+    let resp = st
+        .http
+        .get(url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .context("Download der Vorschau von Euro-Office")?;
+    let stream = resp.bytes_stream().map_err(|e| e.to_string());
+    let staged = st.storage.stage(Box::pin(stream), st.config.max_upload_bytes).await?;
+    let mut head = [0u8; 5];
+    let is_pdf = {
+        use tokio::io::AsyncReadExt;
+        let mut f = tokio::fs::File::open(&staged.tmp_path).await?;
+        f.read_exact(&mut head).await.is_ok() && &head == b"%PDF-"
+    };
+    if !is_pdf {
+        st.storage.discard(&staged).await;
+        bail!("Euro-Office lieferte kein PDF");
+    }
+    if let Some(dir) = dest.parent() {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+    if let Err(e) = tokio::fs::rename(&staged.tmp_path, dest).await {
+        st.storage.discard(&staged).await;
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Fehlercodes des Umwandlungsdienstes
+fn error_text(code: i64) -> &'static str {
+    match code {
+        -2 => "Zeitüberschreitung bei der Umwandlung",
+        -3 => "Umwandlung fehlgeschlagen",
+        -4 => "Datei konnte nicht von Büro geladen werden (BUERO_PUBLIC_URL prüfen)",
+        -5 => "Datei ist passwortgeschützt",
+        -6 => "Datenbankfehler im Document Server",
+        -7 => "Ungültige Anfrage",
+        -8 => "Ungültiges Token (BUERO_OFFICE_JWT_SECRET prüfen)",
+        -10 => "Datei ist zu groß",
+        _ => "unbekannter Fehler",
+    }
+}
