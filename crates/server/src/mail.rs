@@ -207,6 +207,13 @@ fn quote(s: &str) -> String {
 /// Ein Postfach abrufen; Rückgabe: Anzahl übernommener Mails
 pub async fn run(st: &AppState, account_id: i64) -> Result<usize> {
     let Some(_guard) = try_start(account_id) else { bail!("Abruf läuft bereits") };
+    let name: String = sqlx::query_scalar("SELECT name FROM mail_accounts WHERE id = ?")
+        .bind(account_id)
+        .fetch_optional(&st.pool)
+        .await?
+        .unwrap_or_default();
+    let _task = crate::tasks::start("mail", format!("Mail-Abruf {name}").trim(), "Verbinden …", None)
+        .live(move || progress(account_id).map(|p| progress_text(&p)));
     let res = tokio::time::timeout(Duration::from_secs(30 * 60), run_inner(st, account_id)).await;
     let res = match res {
         Ok(r) => r,
@@ -620,4 +627,25 @@ pub fn spawn(st: AppState) {
             }
         }
     });
+}
+
+/// Fortschritt eines Abrufs als eine Zeile, z. B.
+/// „Posteingang (1/3): Mails laden 120/500 · 12 neu“
+fn progress_text(p: &shared::MailProgress) -> String {
+    let mut t = String::new();
+    if !p.folder.is_empty() {
+        t.push_str(&p.folder);
+        if p.folder_count > 1 {
+            t.push_str(&format!(" ({}/{})", p.folder_index, p.folder_count));
+        }
+        t.push_str(": ");
+    }
+    t.push_str(p.phase.trim_end_matches(" …").trim_end_matches('…'));
+    if p.total > 0 {
+        t.push_str(&format!(" {}/{}", p.done.min(p.total), p.total));
+    }
+    if p.imported > 0 {
+        t.push_str(&format!(" · {} neu", p.imported));
+    }
+    t
 }

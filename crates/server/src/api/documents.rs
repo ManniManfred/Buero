@@ -699,7 +699,7 @@ pub async fn preview(State(st): State<AppState>, Path(id): Path<i64>, req: Reque
     }
     let base = st.public_base(req.headers());
     let ancestors = HeaderValue::from_str(&crate::security::file_frame_ancestors()).ok();
-    let mut res = match crate::preview::ensure(&st, &doc, &base).await {
+    let mut res = match crate::preview::ensure(&st, &doc, &base, None).await {
         Ok(pdf) => {
             // Vorschaubild nachholen (z. B. bei älteren Dokumenten)
             if !doc.has_thumbnail {

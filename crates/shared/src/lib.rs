@@ -744,3 +744,29 @@ mod tests {
         assert_eq!(super::mail_folder_collection_name("Gel&APY-schte Elemente"), "Gelöschte Elemente");
     }
 }
+
+/// Eine laufende Hintergrundaufgabe des Servers
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundTask {
+    pub id: u64,
+    /// `document`, `mail`, `preview` oder `index`
+    pub kind: String,
+    /// Worum es geht, z. B. der Dokumenttitel oder das Postfach
+    pub title: String,
+    /// Was gerade passiert, z. B. „Text erkennen“
+    pub phase: String,
+    /// Unix-Sekunden
+    pub started_at: i64,
+    /// Dokument, um das es geht (zum Öffnen)
+    pub document_id: Option<i64>,
+}
+
+/// Laufende Hintergrundaufgaben und Warteschlange
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundTasks {
+    pub tasks: Vec<BackgroundTask>,
+    /// Dokumente, die auf ihre Verarbeitung warten
+    pub queued: i64,
+    /// Serverzeit (Unix-Sekunden), für die Laufzeit der Aufgaben
+    pub now: i64,
+}

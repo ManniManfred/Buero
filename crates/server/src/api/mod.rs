@@ -65,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/features", get(office::features))
         .route("/api/office/config/{id}", get(office::config))
         .route("/api/stats", get(stats))
+        .route("/api/tasks", get(tasks))
         .route("/api/dashboard", get(dashboard::dashboard))
         .route("/api/admin/reindex", post(reindex))
         .route("/api/admin/reprocess-failed", post(reprocess_failed))
@@ -146,6 +147,13 @@ async fn stats(State(st): State<AppState>) -> AppResult<Json<Stats>> {
     .fetch_one(&st.pool)
     .await?;
     Ok(Json(Stats { documents, total_size, pending, failed, unfiled }))
+}
+
+async fn tasks(State(st): State<AppState>) -> AppResult<Json<shared::BackgroundTasks>> {
+    let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM documents WHERE extract_status = 'pending'")
+        .fetch_one(&st.pool)
+        .await?;
+    Ok(Json(shared::BackgroundTasks { tasks: crate::tasks::list(), queued, now: crate::util::now() }))
 }
 
 async fn reindex(State(st): State<AppState>) -> AppResult<Json<serde_json::Value>> {

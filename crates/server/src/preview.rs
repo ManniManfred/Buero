@@ -33,16 +33,28 @@ pub fn available(st: &AppState, doc: &DocRow) -> bool {
 
 /// Liefert die PDF-Vorschau des Dokuments und erzeugt sie bei Bedarf.
 /// `base`: Adresse, unter der der Document Server Büro erreicht.
-pub async fn ensure(st: &AppState, doc: &DocRow, base: &str) -> Result<PathBuf> {
+/// `task`: Eintrag der Aufgabenliste, der den Schritt anzeigt (sonst ein eigener).
+pub async fn ensure(st: &AppState, doc: &DocRow, base: &str, task: Option<&crate::tasks::Task>) -> Result<PathBuf> {
     let path = st.storage.preview_path(&doc.sha256);
     if exists(&path).await {
         return Ok(path);
     }
+    // Eigener Eintrag, sofern nicht schon die Verarbeitung des Dokuments dort steht
+    let own = (task.is_none() && !crate::tasks::has_document(doc.id))
+        .then(|| crate::tasks::start("preview", &doc.title, "", Some(doc.id)));
+    let task = task.or(own.as_ref());
+    let phase = |p: &str| {
+        if let Some(t) = task {
+            t.phase(p);
+        }
+    };
+    phase("Wartet auf Euro-Office");
     let _guard = CONVERT_LOCK.lock().await;
     // Inzwischen von einer anderen Anfrage erzeugt?
     if exists(&path).await {
         return Ok(path);
     }
+    phase("PDF-Vorschau über Euro-Office");
     let started = Instant::now();
     let url = convert(st, doc, base).await?;
     download(st, &url, &path).await?;

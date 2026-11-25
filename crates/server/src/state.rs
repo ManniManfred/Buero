@@ -110,9 +110,11 @@ impl AppState {
 
     pub async fn reindex_all(&self) -> anyhow::Result<usize> {
         let ids = crate::db::all_doc_ids(&self.pool).await?;
+        let task = crate::tasks::start("index", "Suchindex neu aufbauen", "Leeren", None);
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.search.clear()).await??;
-        for chunk in ids.chunks(500) {
+        for (i, chunk) in ids.chunks(500).enumerate() {
+            task.phase(format!("{} von {} Dokumenten", i * 500, ids.len()));
             let docs = crate::db::index_docs(&self.pool, chunk).await?;
             let this = self.clone();
             tokio::task::spawn_blocking(move || this.search.upsert(&docs)).await??;

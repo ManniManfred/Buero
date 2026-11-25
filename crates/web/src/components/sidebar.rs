@@ -270,11 +270,10 @@ pub fn Sidebar() -> impl IntoView {
                 }).collect_view()}
             </div>
             <div class="sidebar-foot muted small">
+                <crate::components::tasks::TaskIndicator />
                 {move || {
                     let s = c.stats.get();
-                    let mut t = format!("{} Dokumente · {}", s.documents, crate::util::format_size(s.total_size));
-                    if s.pending > 0 { t.push_str(&format!(" · {} in Arbeit", s.pending)); }
-                    t
+                    format!("{} Dokumente · {}", s.documents, crate::util::format_size(s.total_size))
                 }}
             </div>
         </aside>

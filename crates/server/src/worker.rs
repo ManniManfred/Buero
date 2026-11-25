@@ -70,6 +70,13 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
         .await?;
 
     let started = std::time::Instant::now();
+    let ext = doc.extension.to_ascii_lowercase();
+    let first = match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" if state.config.ocr_enabled => "Texterkennung (OCR)",
+        "pdf" if state.config.ocr_enabled => "Text auslesen, ggf. Texterkennung",
+        _ => "Text auslesen",
+    };
+    let task = crate::tasks::start("document", &doc.title, first, Some(id));
     let path = state.storage.file_path(&doc.sha256);
     let opts = ExtractOptions {
         ocr: state.config.ocr_enabled,
@@ -82,6 +89,7 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
         Err(e) => (String::new(), None, Some(format!("{e:#}"))),
     };
 
+    task.phase("Vorschaubild");
     let thumb = state.storage.thumb_path(id);
     let mut has_thumb = match extract::thumbnail(&path, &doc.extension, &thumb, &state.storage.tmp_dir()).await {
         Ok(b) => b,
@@ -95,7 +103,7 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
     // Start) entsteht sie beim ersten Ansehen.
     if !has_thumb && crate::preview::available(state, &doc) {
         if let Some(base) = state.background_base() {
-            match crate::preview::ensure(state, &doc, &base).await {
+            match crate::preview::ensure(state, &doc, &base, Some(&task)).await {
                 Ok(pdf) => {
                     has_thumb = extract::thumbnail(&pdf, "pdf", &thumb, &state.storage.tmp_dir())
                         .await
@@ -131,6 +139,7 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
     .await?;
 
     if err.is_none() && crate::autotitle::scannable(&doc.extension) && crate::autotitle::is_scan_name(&doc.title) {
+        task.phase("Titel aus dem Inhalt");
         if let Err(e) = name_scan(state, &doc, &text).await {
             tracing::warn!("Kein Titel aus dem Inhalt für {id}: {e:#}");
         }
@@ -140,7 +149,9 @@ async fn process(state: &AppState, id: i64) -> anyhow::Result<()> {
             tracing::warn!("E-Mail {id} nicht vollständig erfasst: {e:#}");
         }
     }
+    task.phase("Suchindex");
     state.reindex(&[id]).await?;
+    drop(task);
     tracing::info!(
         "Dokument {id} verarbeitet ({} Zeichen) in {:.1?}",
         text.len(),

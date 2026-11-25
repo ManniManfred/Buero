@@ -17,6 +17,7 @@ mod search;
 mod security;
 mod sign;
 mod state;
+mod tasks;
 mod storage;
 mod templates;
 mod util;

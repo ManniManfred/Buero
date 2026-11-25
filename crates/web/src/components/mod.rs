@@ -18,6 +18,7 @@ pub mod scan;
 pub mod settings;
 pub mod share;
 pub mod sidebar;
+pub mod tasks;
 pub mod titlebar;
 pub mod toolbar;
 pub mod tupfer;

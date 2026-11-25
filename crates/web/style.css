@@ -749,3 +749,29 @@ button.danger-solid:hover { filter: brightness(1.08); border-color: var(--danger
 /* Sammlungen im Baum verschieben */
 .section-head.drop-target { outline: 2px dashed var(--accent); background: var(--accent-soft); border-radius: 6px; }
 .tree-row[draggable="true"]:active { cursor: grabbing; }
+
+/* Hintergrundaufgaben (Seitenleiste unten) */
+.tasks { margin-bottom: 6px; }
+.tasks-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border-radius: 8px;
+  color: var(--accent); font-size: 12px; text-align: left; background: transparent; border: 1px solid transparent;
+}
+.tasks-toggle:hover, .tasks-toggle.open { border-color: var(--border); background: var(--bg); }
+.tasks-spin {
+  width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite;
+}
+.tasks-panel {
+  position: fixed; left: 8px; bottom: 56px; z-index: 50; width: min(380px, calc(100vw - 16px));
+  max-height: 60vh; overflow-y: auto; padding: 10px 12px; color: var(--text); font-size: 13px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.tasks-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.tasks-panel ul { list-style: none; margin: 0; padding: 0; }
+.tasks-panel li { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 6px; }
+.tasks-panel li.link { cursor: pointer; }
+.tasks-panel li.link:hover { background: var(--bg); }
+.task-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-time { flex-shrink: 0; }
+.tasks-panel p { margin: 6px 4px 2px; }
