@@ -109,10 +109,46 @@ impl From<ApiError> for Error {
     }
 }
 
+/// Zusätzlich ausgeschlossene Namen (Muster mit `*` und `?`, kleingeschrieben)
+static EXCLUDES: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Eigene Ausschlussmuster setzen (gelten für alle Laufwerke und Sync-Ordner,
+/// ab dem nächsten Abgleich). Je Muster ein Datei- oder Ordnername, `*` steht
+/// für beliebig viele Zeichen, `?` für eines; Groß-/Kleinschreibung egal.
+pub fn set_excludes(patterns: &[String]) {
+    let list = patterns.iter().map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()).collect();
+    *EXCLUDES.write().unwrap_or_else(|e| e.into_inner()) = list;
+}
+
+/// Passt `name` auf das Muster (`*` beliebig viele, `?` genau ein Zeichen)?
+fn glob_match(pat: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pat.chars().collect(), name.chars().collect());
+    let (mut pi, mut ni) = (0, 0);
+    // Letzter `*` und die Stelle im Namen, ab der er gerade passt
+    let mut star: Option<(usize, usize)> = None;
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some((pi, ni));
+            pi += 1;
+        } else if let Some((sp, sn)) = star {
+            pi = sp + 1;
+            ni = sn + 1;
+            star = Some((sp, sn + 1));
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
+}
+
 /// Dateien, die nicht hochgeladen werden, sondern nur lokal existieren
 pub fn is_temp(name: &str) -> bool {
     let l = name.to_lowercase();
-    l.starts_with('.')
+    EXCLUDES.read().unwrap_or_else(|e| e.into_inner()).iter().any(|p| glob_match(p, &l))
+        || l.starts_with('.')
         || l.starts_with('~')
         || l.ends_with('~')
         || [".tmp", ".temp", ".swp", ".swx", ".part", ".crdownload", ".partial"].iter().any(|e| l.ends_with(e))
@@ -1331,6 +1367,15 @@ mod tests {
         assert_eq!(title_from_name("Neu.txt", "x.pdf"), "Neu.txt");
         assert_eq!(sanitize_name("a:b. "), "a_b");
         assert!(is_temp("~$Brief.docx") && is_temp(".~lock.a.odt#") && is_temp("lu123.tmp") && !is_temp("a.docx"));
+    }
+
+    #[test]
+    fn patterns() {
+        assert!(glob_match("*.bak", "brief.bak") && !glob_match("*.bak", "brief.bak.pdf"));
+        assert!(glob_match("node_modules", "node_modules") && !glob_match("node_modules", "node_modules2"));
+        assert!(glob_match("a*b*c", "axxbyyc") && glob_match("a*b*c", "abc") && !glob_match("a*b*c", "axxbyy"));
+        assert!(glob_match("entwurf?.docx", "entwurf1.docx") && !glob_match("entwurf?.docx", "entwurf.docx"));
+        assert!(glob_match("*", "x") && glob_match("**", ""));
     }
 
     #[test]

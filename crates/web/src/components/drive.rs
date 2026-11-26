@@ -181,6 +181,8 @@ pub fn DriveSection() -> impl IntoView {
                 <div class="small error-text">{e.lines().map(|l| view! { <p>{l.to_string()}</p> }).collect_view()}</div>
             })}
             {s.folders_unavailable.is_none().then(|| view! { <FolderSection status=status /> })}
+            <ExcludeSection />
+
             <Show when=move || status.with(|st| st.as_ref().is_some_and(|st| (st.mounted && st.mode == "sync") || !st.folders.is_empty()))>
                 <button on:click=move |_| spawn_local(async move {
                     if let Err(e) = invoke::<()>("activity_open", json!({})).await {
@@ -192,6 +194,55 @@ pub fn DriveSection() -> impl IntoView {
             </Show>
             <hr />
         }})}
+    }
+}
+
+/// Eigene Ausschlussmuster: passende Dateien und Ordner bleiben nur lokal
+#[component]
+fn ExcludeSection() -> impl IntoView {
+    let c = ctx();
+    let text = RwSignal::new(String::new());
+    // Gespeicherter Stand, um „Speichern“ nur bei Änderungen anzubieten
+    let saved = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let apply = move |list: Vec<String>| {
+        let t = list.join("\n");
+        text.set(t.clone());
+        saved.set(t);
+    };
+    spawn_local(async move {
+        if let Ok(list) = invoke::<Vec<String>>("exclude_get", json!({})).await {
+            apply(list);
+        }
+    });
+    let save = move |_| {
+        busy.set(true);
+        let patterns: Vec<String> = text.get_untracked().lines().map(str::to_string).collect();
+        spawn_local(async move {
+            match invoke::<Vec<String>>("exclude_set", json!({ "patterns": patterns })).await {
+                Ok(list) => {
+                    apply(list);
+                    c.notify("Ausschlüsse gespeichert".to_string(), false);
+                }
+                Err(e) => c.notify(e, true),
+            }
+            busy.set(false);
+        });
+    };
+    view! {
+        <label>"Nicht abgleichen (ein Muster je Zeile)"
+            <textarea rows="4" placeholder="*.bak\nnode_modules\nEntwurf*"
+                prop:value=move || text.get() on:input=move |ev| text.set(event_target_value(&ev)) />
+        </label>
+        <p class="muted small">
+            "Passende Dateien und Ordner (samt Inhalt) bleiben nur auf diesem Computer. „*“ steht für beliebig "
+            "viele Zeichen, „?“ für eines; Groß-/Kleinschreibung spielt keine Rolle. Versteckte und temporäre "
+            "Dateien (z. B. „.git“, „~$…“, „*.tmp“) sind immer ausgenommen. Schon abgeglichene Dokumente bleiben "
+            "in Büro, werden aber nicht mehr aktualisiert."
+        </p>
+        <button on:click=save disabled=move || busy.get() || text.with(|t| saved.with(|s| t.trim() == s.trim()))>
+            "Ausschlüsse speichern"
+        </button>
     }
 }
 

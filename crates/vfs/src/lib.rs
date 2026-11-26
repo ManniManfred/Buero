@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use crate::activity::{ActivityEntry, SyncState};
-pub use crate::core::INBOX_NAME;
+pub use crate::core::{set_excludes, INBOX_NAME};
 pub use crate::sync::ActKind;
 #[cfg(target_os = "linux")]
 use crate::core::Vfs;

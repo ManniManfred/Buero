@@ -45,6 +45,9 @@ struct DriveSettings {
     /// Weitere Sync-Ordner, je einer Sammlung zugeordnet
     #[serde(default)]
     folders: Vec<FolderSetting>,
+    /// Eigene Ausschlussmuster (Datei- oder Ordnernamen, `*` und `?`): bleiben nur lokal
+    #[serde(default)]
+    exclude: Vec<String>,
 }
 
 /// Sync-Ordner für eine Sammlung
@@ -230,6 +233,7 @@ async fn connect_folder(
 ) -> Result<(), String> {
     let old = st.folders.lock().unwrap_or_else(|e| e.into_inner()).remove(&f.collection_id);
     drop(old);
+    buero_vfs::set_excludes(&load_settings(app).exclude);
     let opts = buero_vfs::Options {
         server: server.clone(),
         token: token.clone(),
@@ -257,6 +261,7 @@ async fn do_mount(
     mount_point: Option<String>,
 ) -> Result<(), String> {
     unmount_now(st);
+    buero_vfs::set_excludes(&load_settings(app).exclude);
     let mp = mount_point
         .filter(|m| !m.trim().is_empty())
         .map(|m| PathBuf::from(m.trim()))
@@ -600,6 +605,24 @@ fn sync_now(st: State<'_, DriveState>, collection_id: Option<i64>) {
     }
 }
 
+/// Eigene Ausschlussmuster
+#[tauri::command]
+fn exclude_get(app: tauri::AppHandle) -> Vec<String> {
+    load_settings(&app).exclude
+}
+
+/// Ausschlussmuster speichern und gleich abgleichen
+#[tauri::command]
+fn exclude_set(app: tauri::AppHandle, st: State<'_, DriveState>, patterns: Vec<String>) -> Result<Vec<String>, String> {
+    let mut s = load_settings(&app);
+    s.exclude = patterns.iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
+    s.exclude.dedup();
+    save_settings(&app, &s)?;
+    buero_vfs::set_excludes(&s.exclude);
+    sync_now(st, None);
+    Ok(s.exclude)
+}
+
 /// Protokolldatei im Standardprogramm öffnen
 #[tauri::command]
 fn sync_log_open(app: tauri::AppHandle) -> Result<(), String> {
@@ -821,6 +844,8 @@ fn main() {
             autostart_set,
             sync_activity,
             sync_now,
+            exclude_get,
+            exclude_set,
             sync_log_open,
             activity_open
         ])
