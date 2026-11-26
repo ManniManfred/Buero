@@ -44,7 +44,7 @@ use cloud_filter::utility::{FileTime, WriteAt};
 
 use crate::client::Client;
 use crate::activity::SharedLog;
-use crate::core::INBOX_NAME;
+use crate::core::{is_temp, INBOX_NAME};
 use crate::sync::{ActKind, Engine, LocalEntry, LocalFs, Meta};
 
 const PROVIDER: &str = "Buero";
@@ -341,7 +341,12 @@ fn apply_pins(root: &Path, activity: &SharedLog) -> bool {
 
 /// Inhalt einer abgeglichenen Datei freigeben; sie bleibt als Platzhalter
 fn free_space(path: &Path) -> std::io::Result<()> {
-    let in_sync = open_attr(path)?.info().map_err(win)?.is_some_and(|i| i.is_in_sync() && i.modified_data_size() == 0);
+    let info = open_attr(path)?.info().map_err(win)?;
+    // Nur lokal vorhanden (z. B. in „.git“): der Inhalt ließe sich nicht wieder laden
+    if !info.as_ref().is_some_and(|i| matches!(Meta::from_blob(i.blob()), Some(Meta::Doc { .. }))) {
+        return Err(win("nur lokal vorhanden"));
+    }
+    let in_sync = info.is_some_and(|i| i.is_in_sync() && i.modified_data_size() == 0);
     if !in_sync {
         return Err(win("noch nicht abgeglichen"));
     }
@@ -366,6 +371,26 @@ pub struct WinLocal {
 /// Öffnen nur für Attribute: lädt keinen Inhalt und kollidiert mit keiner Sperre
 fn open_attr(path: &Path) -> std::io::Result<Placeholder> {
     OpenOptions::new().access_mode(0).custom_flags(BACKUP_SEMANTICS).open(path).map(Placeholder::from)
+}
+
+/// Nur lokal vorhandenen Eintrag als abgeglichen markieren (Platzhalter ohne
+/// Kennung, der Inhalt bleibt). Klappt es nicht (z. B. Datei gerade zum
+/// Schreiben geöffnet), beim nächsten Durchlauf erneut.
+fn mark_local_only(path: &Path, is_dir: bool) {
+    let res = (|| {
+        // Während des Markierens darf niemand schreiben
+        let _guard = if is_dir { None } else { Some(open_guard(path)?) };
+        let mut ph = open_attr(path)?;
+        if ph.info().map_err(win)?.is_none() {
+            ph.convert_to_placeholder(ConvertOptions::default().mark_in_sync(), None).map_err(win)?;
+        } else {
+            ph.update(UpdateOptions::default().mark_in_sync(), None).map_err(win)?;
+        }
+        Ok::<_, std::io::Error>(())
+    })();
+    if let Err(e) = res {
+        log::debug!("Büro-Sync: {} nicht markiert: {e}", path.display());
+    }
 }
 
 /// Zum Lesen öffnen und Schreiben anderer verhindern
@@ -410,6 +435,12 @@ impl LocalFs for WinLocal {
                     Some(i) => (Meta::from_blob(i.blob()), !is_dir && (!i.is_in_sync() || i.modified_data_size() > 0)),
                     None => (None, !is_dir),
                 };
+                // Versteckte bzw. temporäre Einträge (und alles darunter) gleicht der
+                // Abgleich nicht ab. Ohne Markierung zeigte der Explorer bei ihnen
+                // dauerhaft „Synchronisierung ausstehend“.
+                if meta.is_none() && !info.as_ref().is_some_and(|i| i.is_in_sync()) && path.iter().any(|n| is_temp(n)) {
+                    mark_local_only(&entry.path(), is_dir);
+                }
                 if is_dir {
                     stack.push(path.clone());
                 }
