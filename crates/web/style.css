@@ -203,7 +203,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .fields label input, .fields label textarea { color: var(--text); font-size: 14px; }
 .field-label { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .picker summary { cursor: pointer; color: var(--accent); font-size: 13px; }
-.picker input { width: 100%; margin: 6px 0; }
+.picker input[type=search] { width: 100%; margin: 6px 0; }
+.check input[type=checkbox] { width: auto; flex: none; margin: 0; }
+.check { justify-content: flex-start; text-align: left; }
 .picker-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .check { display: flex; gap: 6px; align-items: center; cursor: pointer; padding: 2px 0; color: var(--text) !important; font-size: 13px !important; flex-direction: row !important; }
 .tag-input { width: 110px; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
