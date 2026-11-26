@@ -10,6 +10,7 @@ mod player;
 mod icons;
 mod js;
 mod markdown;
+mod nav;
 mod state;
 mod util;
 
@@ -213,6 +214,8 @@ fn Login(on_done: Callback<()>) -> impl IntoView {
 fn Main() -> impl IntoView {
     let c = ctx();
     c.load_meta();
+    // Ansicht <-> Adresse und Browser-Verlauf (vor der ersten Suche)
+    nav::init(c);
 
     // Filter/Sortierung geändert -> sofort suchen; Suchtext -> kurz entprellt
     Effect::new(move |_| {

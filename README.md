@@ -58,6 +58,13 @@ Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crat
   - Treffer-Ausschnitte mit Hervorhebung
   - Durchsucht Titel, Dateiname, Notiz, Tags, Sammlungsnamen und Inhalt (unterschiedlich gewichtet)
   - Kombinierbar mit Filtern (Sammlung, Tags, Dateiart, „Eingang“) und Sortierung
+- **Zurück-Taste und Lesezeichen**: Die Ansicht steht in der Adresse
+  (z. B. `#/sammlung/12/dokument/345?q=rechnung`). Die Zurück- und Vor-Taste
+  des Browsers (auf dem Handy die Zurück-Geste) wechseln zwischen Sammlungen,
+  Übersicht, Suche, Detailansicht, Editoren und Einstellungen; beim Weitertippen
+  in der Suche entsteht kein Eintrag pro Buchstabe. Hat ein Editor ungespeicherte
+  Änderungen oder der Scanner schon Seiten, fragt „Zurück“ erst nach. Lesezeichen
+  und Neuladen landen wieder an derselben Stelle.
 - **Mehrfache Gruppierung**:
   - **Sammlungen** sind hierarchisch (beliebig tief) – und ein Dokument kann in
     **beliebig vielen** Sammlungen gleichzeitig liegen (z. B. *Finanzen / Rechnungen*

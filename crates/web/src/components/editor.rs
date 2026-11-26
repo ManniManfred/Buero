@@ -159,6 +159,7 @@ pub fn TextEditor(id: i64) -> impl IntoView {
             close_now();
         }
     };
+    crate::nav::guard_back(close);
 
     let keydown = move |ev: web_sys::KeyboardEvent| {
         if (ev.ctrl_key() || ev.meta_key()) && ev.key().eq_ignore_ascii_case("s") {

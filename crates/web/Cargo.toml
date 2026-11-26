@@ -18,7 +18,7 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = [
-  "Window", "Document", "Location", "Storage", "File", "FileList", "FormData",
+  "Window", "Document", "Location", "History", "Storage", "File", "FileList", "FormData",
   "DataTransfer", "DragEvent", "HtmlInputElement", "HtmlSelectElement", "KeyboardEvent",
   "Blob", "BlobPropertyBag", "HtmlTextAreaElement", "Element", "Navigator", "DomRect", "HtmlAudioElement", "HtmlMediaElement",
 ] }
