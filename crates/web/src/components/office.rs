@@ -40,6 +40,7 @@ pub fn OfficeEditor(id: i64, title: String) -> impl IntoView {
             }
         }
     };
+    crate::nav::guard_back(close);
 
     spawn_local(async move {
         match c.api.get::<OfficeConfig>(&format!("/api/office/config/{id}")).await {

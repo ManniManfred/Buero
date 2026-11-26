@@ -89,6 +89,7 @@ pub fn TupferEditor(id: i64, title: String) -> impl IntoView {
             std::time::Duration::from_millis(ASK_TIMEOUT_MS),
         );
     };
+    crate::nav::guard_back(close);
 
     view! {
         <div class="office-overlay">

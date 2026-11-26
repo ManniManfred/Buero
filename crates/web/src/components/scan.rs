@@ -682,6 +682,7 @@ pub fn Scanner() -> impl IntoView {
             move || c.scan.set(false),
         );
     };
+    crate::nav::guard_back(close);
 
     let capture = move || {
         if !cam_ready.get_untracked() {
