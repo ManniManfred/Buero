@@ -192,7 +192,6 @@ pub fn DriveSection() -> impl IntoView {
                     <Icon name="history" />"Aktivität und Fehlerprotokoll"
                 </button>
             </Show>
-            <hr />
         }})}
     }
 }
