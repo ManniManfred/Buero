@@ -4,8 +4,10 @@
 //! Eigene Titelleiste des Desktop-Clients (Fenster ohne Systemrahmen)
 
 use leptos::prelude::*;
+use leptos::task::spawn_local;
+use serde_json::json;
 
-use crate::api::window_action;
+use crate::api::{invoke, window_action};
 use crate::components::toolbar::SearchRow;
 use crate::icons::Icon;
 use crate::state::ctx;
@@ -23,6 +25,14 @@ pub fn TitleBar(#[prop(into)] ready: Signal<bool>) -> impl IntoView {
                     <span class="brand-version" title="Version">{crate::util::version()}</span></span>
                 <Show when=move || ready.get()>
                     <button class="icon" title="Einstellungen" on:click=move |_| c.show_settings.set(true)><Icon name="settings" /></button>
+                    <button class="icon" title="Synchronisierung (Zustand, Probleme, Verlauf)" aria-label="Synchronisierung"
+                        on:click=move |_| spawn_local(async move {
+                            if let Err(e) = invoke::<()>("activity_open", json!({})).await {
+                                c.notify(e, true);
+                            }
+                        })>
+                        <Icon name="history" />
+                    </button>
                 </Show>
             </div>
             <div class="tb-main">
