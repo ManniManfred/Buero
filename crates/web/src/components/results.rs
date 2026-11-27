@@ -57,11 +57,12 @@ fn ResultRow(doc: DocumentSummary) -> impl IntoView {
     let thumb = doc
         .has_thumbnail
         .then(|| c.api.file_url(&format!("/api/documents/{id}/thumbnail?v={}", doc.updated_at)));
-    let date = doc
-        .document_date
-        .as_deref()
-        .map(format_date)
-        .unwrap_or_else(|| format_ts(doc.created_at));
+    // Bei Mails Sendedatum mit Uhrzeit, sonst fachliches Datum bzw. Upload
+    let date = match (doc.email_sent_at, doc.document_date.as_deref()) {
+        (Some(ts), _) => format_ts(ts),
+        (None, Some(d)) => format_date(d),
+        (None, None) => format_ts(doc.created_at),
+    };
     let status = status_label(&doc.extract_status);
     let kind = doc.kind.clone();
     let collections = doc.collection_ids.clone();

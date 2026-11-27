@@ -95,6 +95,9 @@ pub struct DocumentSummary {
     /// Absender (nur bei E-Mails)
     #[serde(default)]
     pub email_from: Option<String>,
+    /// Sendezeitpunkt (Unix-Sekunden, nur bei E-Mails)
+    #[serde(default)]
+    pub email_sent_at: Option<i64>,
     /// HTML-Snippet mit `<b>`-Hervorhebungen (nur bei Suche)
     pub snippet: Option<String>,
     pub score: Option<f32>,

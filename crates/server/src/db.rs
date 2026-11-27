@@ -77,6 +77,7 @@ impl DocRow {
             parent_title: None,
             child_count: 0,
             email_from: None,
+            email_sent_at: None,
             snippet: None,
             score: None,
         }
@@ -153,11 +154,12 @@ pub async fn summaries(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Docum
         push_ids(&mut qb, chunk);
         parent_titles.extend(qb.build_query_as::<(i64, String)>().fetch_all(pool).await?);
     }
-    let mut senders: HashMap<i64, String> = HashMap::new();
+    let mut senders: HashMap<i64, (String, Option<i64>)> = HashMap::new();
     for chunk in ids.chunks(500) {
-        let mut qb = QueryBuilder::<Sqlite>::new("SELECT document_id, sender FROM emails WHERE sender <> '' AND document_id IN ");
+        let mut qb = QueryBuilder::<Sqlite>::new("SELECT document_id, sender, sent_at FROM emails WHERE document_id IN ");
         push_ids(&mut qb, chunk);
-        senders.extend(qb.build_query_as::<(i64, String)>().fetch_all(pool).await?);
+        let rows = qb.build_query_as::<(i64, String, Option<i64>)>().fetch_all(pool).await?;
+        senders.extend(rows.into_iter().map(|(id, sender, sent)| (id, (sender, sent))));
     }
     Ok(ids
         .iter()
@@ -166,7 +168,10 @@ pub async fn summaries(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<Docum
                 let mut s = r.summary(colls.remove(id).unwrap_or_default(), tags.remove(id).unwrap_or_default());
                 s.child_count = children.get(id).copied().unwrap_or(0);
                 s.parent_title = r.parent_id.and_then(|p| parent_titles.get(&p).cloned());
-                s.email_from = senders.remove(id);
+                if let Some((sender, sent)) = senders.remove(id) {
+                    s.email_from = Some(sender).filter(|f| !f.is_empty());
+                    s.email_sent_at = sent;
+                }
                 s
             })
         })

@@ -16,13 +16,14 @@ pub fn format_size(bytes: i64) -> String {
     }
 }
 
+/// Unix-Zeit -> `01.03.2024, 14:05` (lokale Zeit)
 pub fn format_ts(ts: i64) -> String {
     let d = js_sys::Date::new(&JsValue::from_f64(ts as f64 * 1000.0));
     let opts = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(&opts, &"day".into(), &"2-digit".into());
-    let _ = js_sys::Reflect::set(&opts, &"month".into(), &"2-digit".into());
-    let _ = js_sys::Reflect::set(&opts, &"year".into(), &"numeric".into());
-    d.to_locale_date_string("de-DE", &opts).into()
+    for (k, v) in [("day", "2-digit"), ("month", "2-digit"), ("year", "numeric"), ("hour", "2-digit"), ("minute", "2-digit")] {
+        let _ = js_sys::Reflect::set(&opts, &k.into(), &v.into());
+    }
+    d.to_locale_string("de-DE", &opts).into()
 }
 
 /// `2024-03-01` -> `01.03.2024`

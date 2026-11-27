@@ -1026,6 +1026,7 @@ mod tests {
             parent_title: None,
             child_count: 0,
             email_from: None,
+            email_sent_at: None,
             snippet: None,
             score: None,
         }

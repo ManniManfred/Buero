@@ -6,20 +6,10 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use shared::{MailAccount, MailAccountInput, MailFolder, ServerFolder};
-use wasm_bindgen::JsValue;
 
 use crate::dialog;
 use crate::icons::Icon;
 use crate::state::{collection_path, ctx};
-
-fn date_time(ts: i64) -> String {
-    let d = js_sys::Date::new(&JsValue::from_f64(ts as f64 * 1000.0));
-    let o = js_sys::Object::new();
-    for (k, v) in [("day", "2-digit"), ("month", "2-digit"), ("year", "numeric"), ("hour", "2-digit"), ("minute", "2-digit")] {
-        let _ = js_sys::Reflect::set(&o, &k.into(), &v.into());
-    }
-    d.to_locale_string("de-DE", &o).into()
-}
 
 #[component]
 pub fn MailSection() -> impl IntoView {
@@ -117,7 +107,7 @@ pub fn MailSection() -> impl IntoView {
                             {if !a.enabled { "Abruf ausgeschaltet".to_string() }
                              else if a.running { "Abruf läuft …".to_string() }
                              else { match a.last_run {
-                                Some(t) => format!("Zuletzt {} · {} neu · {} Ordner", date_time(t), a.last_imported, a.folders.len()),
+                                Some(t) => format!("Zuletzt {} · {} neu · {} Ordner", crate::util::format_ts(t), a.last_imported, a.folders.len()),
                                 None => format!("Noch nicht abgerufen · {} Ordner", a.folders.len()),
                              } }}
                         </div>
