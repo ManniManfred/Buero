@@ -340,6 +340,18 @@ pub struct DocumentBrief {
     pub created_at: i64,
 }
 
+/// Begonnener Upload in Teilstücken (`POST /api/uploads`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkedUpload {
+    pub id: String,
+}
+
+/// Stand eines Uploads in Teilstücken: bisher empfangene Bytes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkedUploadStatus {
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
     pub error: String,

@@ -141,7 +141,10 @@ Standardprogramm des Systems, Sammlungen als Sync-Ordner bzw. Laufwerk – `crat
    - **Environment Variables**: `BUERO_PASSWORD=<dein-langes-passwort>`
    - Container HTTP Port: `80` (Standard)
 3. Unter *HTTP Settings* HTTPS aktivieren und erzwingen. Für große Uploads ggf.
-   in der NGINX-Konfiguration `client_max_body_size 1024m;` setzen.
+   in der NGINX-Konfiguration `client_max_body_size 1024m;` setzen. Der
+   Desktop-Client (Sync-Ordner, Laufwerk) lädt Dateien über 64 MB in Stücken
+   hoch und kommt deshalb auch mit kleinerer Grenze aus; für ihn zählt nur
+   `BUERO_MAX_UPLOAD_MB`.
 4. Deployen – siehe nächster Abschnitt.
 
 ### Kontinuierliches Deployment (empfohlen)
@@ -484,6 +487,8 @@ Alle Endpunkte (außer Anmeldung/Status und Desktop-Download) erwarten `Authoriz
 | `GET` | `/api/documents/{id}/file[?download=true&version=N]` | Datei (unterstützt Range-Requests) |
 | `GET` | `/api/documents/{id}/thumbnail` · `/text` | Vorschaubild · erkannter Text |
 | `POST` | `/api/documents/{id}/versions` | Neue Version hochladen |
+| `POST` | `/api/uploads` | Upload in Teilstücken beginnen → `{ "id" }` |
+| `PUT/DELETE` | `/api/uploads/{id}?offset=N` | Teilstück anhängen (rohe Bytes, `offset` = bisher übertragen) / verwerfen. Abschließen mit `POST /api/documents` oder `…/versions`: Feld `upload_id` (Wert: Kennung, `filename`: Dateiname) statt `file` |
 | `POST` | `/api/documents/{id}/reprocess` | Texterkennung wiederholen |
 | `POST` | `/api/documents/bulk` | Mehrere Dokumente: Sammlungen/Tags hinzufügen/entfernen, löschen |
 | `GET/POST` | `/api/collections` · `PATCH/DELETE /api/collections/{id}` | Sammlungen (mit `parent_id`) |

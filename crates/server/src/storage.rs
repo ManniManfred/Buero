@@ -92,6 +92,38 @@ impl Storage {
         })
     }
 
+    /// Teil-Upload (stückweise hochgeladene Datei) zur Kennung `id`. `None`,
+    /// wenn die Kennung kein gültiges Format hat (nur Hex, 32 Zeichen).
+    pub fn chunked_path(&self, id: &str) -> Option<PathBuf> {
+        (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()))
+            .then(|| self.tmp_dir().join(format!("chunked-{id}")))
+    }
+
+    /// Fertig hochgeladenen Teil-Upload übernehmen: Hash berechnen und wie
+    /// eine gestagte Datei behandeln (danach gibt es die Kennung nicht mehr).
+    pub async fn stage_chunked(&self, id: &str) -> anyhow::Result<StagedFile> {
+        let src = self.chunked_path(id).ok_or_else(|| anyhow::anyhow!("Ungültige Upload-Kennung"))?;
+        let tmp_path = self.tmp_dir().join(format!("up-{:016x}", rand::random::<u64>()));
+        tokio::fs::rename(&src, &tmp_path)
+            .await
+            .map_err(|_| anyhow::anyhow!("Upload nicht gefunden (abgelaufen?)"))?;
+        let p = tmp_path.clone();
+        let hashed = tokio::task::spawn_blocking(move || -> std::io::Result<(String, u64)> {
+            let mut f = std::fs::File::open(&p)?;
+            let mut hasher = Sha256::new();
+            let size = std::io::copy(&mut f, &mut hasher)?;
+            Ok((hex::encode(hasher.finalize()), size))
+        })
+        .await?;
+        match hashed {
+            Ok((sha256, size)) => Ok(StagedFile { tmp_path, sha256, size: size as i64 }),
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                Err(e.into())
+            }
+        }
+    }
+
     /// Verschiebt eine gestagte Datei an ihren endgültigen Ort (oder verwirft sie,
     /// falls derselbe Inhalt schon existiert).
     pub async fn commit(&self, staged: &StagedFile) -> std::io::Result<()> {

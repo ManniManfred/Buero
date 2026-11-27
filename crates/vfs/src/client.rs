@@ -9,8 +9,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use shared::{Collection, CollectionInput, DocumentSummary, DocumentUpdate, ListResponse, UploadResult};
+use shared::{
+    ChunkedUpload, ChunkedUploadStatus, Collection, CollectionInput, DocumentSummary, DocumentUpdate, ListResponse,
+    UploadResult,
+};
 use ureq::unversioned::multipart::{Form, Part};
+
+/// Dateien über dieser Größe werden in Stücken dieser Größe hochgeladen
+/// (bleibt unter üblichen Proxy-Grenzen wie 100 MB)
+const CHUNK_SIZE: u64 = 64 * 1024 * 1024;
 
 /// Fehler einer API-Anfrage
 #[derive(Debug, Clone)]
@@ -200,38 +207,118 @@ impl Client {
     ) -> ApiResult<DocumentSummary> {
         let ids = collection_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
         let mtime = mtime_of(file);
-        let mut reader = open(file)?;
-        let mut form = Form::new().text("title", title);
+        let mut fields = vec![("title", title.to_string())];
         if !ids.is_empty() {
-            form = form.text("collection_ids", &ids);
+            fields.push(("collection_ids", ids));
         }
-        if let Some(t) = &mtime {
-            form = form.text("file_mtime", t);
+        if let Some(t) = mtime {
+            fields.push(("file_mtime", t));
         }
-        let form = form.part("file", Part::reader(&mut reader).file_name(filename));
-        let r = self.auth(self.agent.post(&self.url("/api/documents"))).send(form);
-        let res: Vec<UploadResult> = Self::json(r)?;
+        let res: Vec<UploadResult> = self.send_file(file, filename, "/api/documents", &fields)?;
         res.into_iter()
             .next()
             .map(|u| u.document)
             .ok_or_else(|| ApiError { status: None, message: "Leere Antwort beim Hochladen".into() })
     }
 
+    /// Datei mit Formularfeldern an `path` schicken. Große Dateien gehen in
+    /// Teilstücken voraus (`/api/uploads`), damit ein Proxy mit Größengrenze
+    /// je Anfrage (z. B. NGINX `client_max_body_size`) sie durchlässt; das
+    /// Formular nennt dann nur noch die Upload-Kennung. Ältere Server ohne
+    /// diese Schnittstelle bekommen die Datei wie bisher am Stück.
+    fn send_file<T: DeserializeOwned>(
+        &self,
+        file: &Path,
+        filename: &str,
+        path: &str,
+        fields: &[(&str, String)],
+    ) -> ApiResult<T> {
+        let form = || fields.iter().fold(Form::new(), |f, (k, v)| f.text(k, v));
+        let len = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+        if len > CHUNK_SIZE {
+            match self.upload_chunked(file, len) {
+                Ok(id) => {
+                    let form = form().part("upload_id", Part::text(&id).file_name(filename));
+                    let res = Self::json(self.auth(self.agent.post(&self.url(path))).send(form));
+                    if res.is_err() {
+                        self.discard_chunked(&id);
+                    }
+                    return res;
+                }
+                // Server kennt keine Teil-Uploads: am Stück versuchen
+                Err(e) if matches!(e.status, Some(404 | 405)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        let mut reader = open(file)?;
+        let form = form().part("file", Part::reader(&mut reader).file_name(filename));
+        Self::json(self.auth(self.agent.post(&self.url(path))).send(form))
+    }
+
+    /// Lädt `file` in Stücken hoch und liefert die Upload-Kennung. Ein
+    /// abgebrochenes Stück wird ein paar Mal wiederholt.
+    fn upload_chunked(&self, file: &Path, len: u64) -> ApiResult<String> {
+        use std::io::{Seek, SeekFrom};
+        let start: ChunkedUpload = Self::json(self.auth(self.agent.post(&self.url("/api/uploads"))).send_empty())?;
+        let id = start.id;
+        let io = |e: std::io::Error| ApiError { status: None, message: format!("Lokale Datei: {e}") };
+        let res = (|| {
+            let mut f = open(file)?;
+            let mut offset = 0u64;
+            while offset < len {
+                let n = CHUNK_SIZE.min(len - offset);
+                let mut tries = 0;
+                loop {
+                    f.seek(SeekFrom::Start(offset)).map_err(io)?;
+                    let req = self
+                        .agent
+                        .put(&self.url(&format!("/api/uploads/{id}?offset={offset}")))
+                        .header("Content-Type", "application/octet-stream")
+                        .header("Content-Length", &n.to_string());
+                    let r = self.auth(req).send(ureq::SendBody::from_reader(&mut (&mut f).take(n)));
+                    match Self::json::<ChunkedUploadStatus>(r) {
+                        Ok(s) if s.size == offset + n => break,
+                        Ok(s) => {
+                            return Err(ApiError {
+                                status: None,
+                                message: format!("Upload: Server hat {} statt {} Bytes", s.size, offset + n),
+                            })
+                        }
+                        // Netzwerk oder Serverfehler: nochmal (der Server hat das halbe Stück verworfen)
+                        Err(e) if tries < 3 && e.status.is_none_or(|s| s >= 500) => {
+                            tries += 1;
+                            std::thread::sleep(Duration::from_secs(2 * tries));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                offset += n;
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => Ok(id),
+            Err(e) => {
+                self.discard_chunked(&id);
+                Err(e)
+            }
+        }
+    }
+
+    fn discard_chunked(&self, id: &str) {
+        let _ = self.auth(self.agent.delete(&self.url(&format!("/api/uploads/{id}")))).call();
+    }
+
     /// Neue Version hochladen. `basis`: Version, auf der die Änderung beruht
     /// (Server lehnt mit 409 ab, wenn es inzwischen eine neuere gibt).
     pub fn new_version(&self, id: i64, file: &Path, filename: &str, basis: Option<i64>) -> ApiResult<DocumentSummary> {
         let mtime = mtime_of(file);
-        let mut reader = open(file)?;
-        let mut form = Form::new();
-        if let Some(t) = &mtime {
-            form = form.text("file_mtime", t);
-        }
-        let form = form.part("file", Part::reader(&mut reader).file_name(filename));
         let mut path = format!("/api/documents/{id}/versions");
         if let Some(b) = basis {
             path.push_str(&format!("?basis={b}"));
         }
-        Self::json(self.auth(self.agent.post(&self.url(&path))).send(form))
+        let fields: Vec<_> = mtime.into_iter().map(|t| ("file_mtime", t)).collect();
+        self.send_file(file, filename, &path, &fields)
     }
 
     pub fn update_document(&self, id: i64, u: &DocumentUpdate) -> ApiResult<DocumentSummary> {
@@ -263,6 +350,6 @@ fn mtime_of(file: &Path) -> Option<String> {
     (secs > 0).then(|| secs.to_string())
 }
 
-fn open(file: &Path) -> ApiResult<impl Read> {
+fn open(file: &Path) -> ApiResult<std::fs::File> {
     std::fs::File::open(file).map_err(|e| ApiError { status: None, message: format!("Lokale Datei: {e}") })
 }

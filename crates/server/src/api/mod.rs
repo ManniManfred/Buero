@@ -27,6 +27,7 @@ pub(crate) mod documents;
 pub(crate) mod office;
 mod shares;
 mod tags;
+mod uploads;
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
@@ -42,6 +43,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/documents/{id}/preview", get(documents::preview))
         .route("/api/documents/{id}/text", get(documents::text))
         .route("/api/documents/{id}/versions", post(documents::new_version))
+        .route("/api/uploads", post(uploads::create))
+        .route("/api/uploads/{id}", axum::routing::put(uploads::put_chunk).delete(uploads::delete))
         .route("/api/documents/{id}/reprocess", post(documents::reprocess))
         .route("/api/documents/{id}/email", get(mail::email_info))
         .route("/api/documents/{id}/links", get(links::get).post(links::add))

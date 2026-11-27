@@ -937,7 +937,7 @@ pub async fn upload_multipart(State(st): State<AppState>, req: Request) -> Respo
         Ok(m) => m,
         Err(e) => return e.into_response(),
     };
-    let form = match super::documents::read_upload_form(&st, &mut mp, st.config.max_upload_bytes).await {
+    let form = match super::documents::read_upload_form(&st, &mut mp, st.config.max_upload_bytes, false).await {
         Ok(f) => f,
         Err(e) => return e.into_response(),
     };

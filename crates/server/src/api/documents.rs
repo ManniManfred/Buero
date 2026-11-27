@@ -128,8 +128,14 @@ pub(crate) struct UploadForm {
 /// Multipart-Formular lesen: beliebig viele Felder `file`, optional
 /// `collection_ids`, `tag_ids` (kommagetrennt), `tags` (Namen, kommagetrennt),
 /// `title`, `document_date` und `file_mtime` (Unix-Sekunden).
-/// `max_bytes`: Höchstgröße pro Datei.
-pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_bytes: usize) -> AppResult<UploadForm> {
+/// `max_bytes`: Höchstgröße pro Datei. `allow_chunked`: statt `file` auch
+/// `upload_id` (in Teilstücken hochgeladene Datei, siehe `api::uploads`).
+pub(crate) async fn read_upload_form(
+    st: &AppState,
+    mp: &mut Multipart,
+    max_bytes: usize,
+    allow_chunked: bool,
+) -> AppResult<UploadForm> {
     let mut f = UploadForm { link_duplicates: true, ..Default::default() };
     let res: AppResult<()> = async {
         while let Some(field) = mp.next_field().await? {
@@ -148,6 +154,7 @@ pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_byte
                         .map_err(|e| AppError::bad_request(format!("{filename}: {e}")))?;
                     f.uploads.push(Upload { staged, filename, mime });
                 }
+                "upload_id" if allow_chunked => f.uploads.push(chunked_upload(st, field, None).await?),
                 "collection_ids" => f.collections = parse_ids(&field.text().await?),
                 "tag_ids" => f.tags = parse_ids(&field.text().await?),
                 "tags" => {
@@ -176,13 +183,35 @@ pub(crate) async fn read_upload_form(st: &AppState, mp: &mut Multipart, max_byte
     Ok(f)
 }
 
+/// Formularfeld `upload_id` (Wert: Kennung, `filename`: Dateiname) in eine
+/// gestagte Datei umwandeln. `fallback_name`: falls kein Dateiname mitkommt.
+async fn chunked_upload(
+    st: &AppState,
+    field: axum::extract::multipart::Field<'_>,
+    fallback_name: Option<&str>,
+) -> AppResult<Upload> {
+    let filename = field
+        .file_name()
+        .map(sanitize_filename)
+        .or_else(|| fallback_name.map(str::to_string))
+        .unwrap_or_else(|| "upload".into());
+    let mime = guess_mime(&filename, None);
+    let id = field.text().await?;
+    let staged = st
+        .storage
+        .stage_chunked(id.trim())
+        .await
+        .map_err(|e| AppError::bad_request(format!("{filename}: {e}")))?;
+    Ok(Upload { staged, filename, mime })
+}
+
 /// Änderungsdatum aus dem Formular (Unix-Sekunden); Unsinniges wird ignoriert
 fn parse_mtime(s: &str) -> Option<i64> {
     s.trim().parse::<i64>().ok().filter(|t| *t > 0)
 }
 
 pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> AppResult<Json<Vec<UploadResult>>> {
-    let form = read_upload_form(&st, &mut mp, st.config.max_upload_bytes).await?;
+    let form = read_upload_form(&st, &mut mp, st.config.max_upload_bytes, true).await?;
     Ok(Json(store_uploads(&st, form).await?))
 }
 
@@ -363,6 +392,9 @@ pub async fn new_version(
                         .await
                         .map_err(|e| AppError::bad_request(e.to_string()))?;
                     upload = Some(Upload { staged, filename, mime });
+                }
+                Some("upload_id") if upload.is_none() => {
+                    upload = Some(chunked_upload(&st, field, Some(&doc.original_filename)).await?);
                 }
                 Some("file_mtime") => file_mtime = parse_mtime(&field.text().await?),
                 _ => {}

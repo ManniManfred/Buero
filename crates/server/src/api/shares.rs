@@ -355,7 +355,7 @@ pub async fn public_upload(
     if st.share_uploads.used(row.id) >= limit {
         return Err(too_many());
     }
-    let mut form = read_upload_form(&st, &mut mp, st.config.share_max_upload_bytes).await?;
+    let mut form = read_upload_form(&st, &mut mp, st.config.share_max_upload_bytes, false).await?;
     let n = form.uploads.len() as u32;
     if st.share_uploads.used(row.id) + n > limit {
         for u in &form.uploads {
