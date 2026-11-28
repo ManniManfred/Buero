@@ -12,7 +12,6 @@
 //! Sync-Ordner können außerdem genau einer Sammlung zugeordnet sein (mehrere
 //! Ordner gleichzeitig möglich).
 
-#[cfg_attr(not(windows), allow(dead_code))]
 mod activity;
 pub mod client;
 // Unter Windows nutzt nur der Sync-Ordner Teile davon (das Laufwerk gibt es dort nicht)
@@ -90,7 +89,7 @@ pub struct Options {
 enum Inner {
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
-    Vfs { vfs: Arc<Vfs>, mount: fuse::Mount },
+    Vfs { vfs: Arc<Vfs>, mount: fuse::Mount, log: activity::SharedLog },
     /// Andere Systeme: nichts einbindbar
     #[cfg(not(any(target_os = "linux", windows)))]
     #[allow(dead_code)]
@@ -137,30 +136,44 @@ impl Drive {
         }
     }
 
-    /// Zustand und letzte Aktivitäten (nur Sync-Ordner)
+    /// Zustand und letzte Aktivitäten
     pub fn activity(&self) -> Option<SyncState> {
         match &self.inner {
             #[cfg(windows)]
             Inner::Sync { log, .. } => log.lock().ok().map(|l| l.state()),
+            #[cfg(target_os = "linux")]
+            Inner::Vfs { log, .. } => log.lock().ok().map(|l| l.state()),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
 
-    /// Sofort abgleichen (nur Sync-Ordner)
+    /// Sofort abgleichen (Laufwerk: Stand vom Server neu laden)
     pub fn sync_now(&self) {
         #[cfg(windows)]
         {
             let Inner::Sync { mount, .. } = &self.inner;
             mount.sync_now();
         }
+        #[cfg(target_os = "linux")]
+        {
+            let Inner::Vfs { vfs, .. } = &self.inner;
+            let vfs = vfs.clone();
+            std::thread::spawn(move || {
+                let _ = vfs.refresh(true);
+            });
+        }
     }
 }
 
-/// Protokolldatei der Sync-Ordner (Aktivitäten und Fehler)
+/// Protokolldatei der Sync-Ordner bzw. des Laufwerks (Aktivitäten und Fehler)
 pub fn log_file(cache_dir: &Path) -> PathBuf {
     cache_dir.join("sync.log")
 }
+
+/// So oft sieht das Laufwerk ohne Zugriffe am Server nach
+#[cfg(target_os = "linux")]
+const DRIVE_POLL: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Wird das Einbinden auf diesem System unterstützt?
 pub const SUPPORTED: bool = cfg!(any(target_os = "linux", windows));
@@ -244,10 +257,20 @@ pub fn mount(o: Options) -> Result<Drive, String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let vfs = Arc::new(Vfs::new(client, o.cache_dir, false).map_err(|e| format!("Zwischenspeicher: {e}"))?);
+        let log = activity::ActivityLog::new("Laufwerk", Some(log_file(&o.cache_dir)));
+        let vfs = Vfs::new(client, o.cache_dir, false).map_err(|e| format!("Zwischenspeicher: {e}"))?;
+        let vfs = Arc::new(vfs.with_log(log.clone()));
         vfs.refresh(true).map_err(|e| format!("Laden fehlgeschlagen: {e:?}"))?;
         let mount = fuse::mount(vfs.clone(), &o.mount_point)?;
-        Ok(Drive { mode: o.mode, collection: None, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount } })
+        // Auch ohne Zugriffe regelmäßig nachsehen, was sich am Server geändert
+        // hat (für das Aktivitätsfenster); endet mit dem Aushängen
+        let weak = Arc::downgrade(&vfs);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(DRIVE_POLL);
+            let Some(vfs) = weak.upgrade() else { break };
+            let _ = vfs.refresh(false);
+        });
+        Ok(Drive { mode: o.mode, collection: None, mount_point: o.mount_point, inner: Inner::Vfs { vfs, mount, log } })
     }
     #[cfg(not(target_os = "linux"))]
     {

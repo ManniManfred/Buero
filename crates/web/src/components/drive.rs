@@ -183,7 +183,7 @@ pub fn DriveSection() -> impl IntoView {
             {s.folders_unavailable.is_none().then(|| view! { <FolderSection status=status /> })}
             <ExcludeSection />
 
-            <Show when=move || status.with(|st| st.as_ref().is_some_and(|st| (st.mounted && st.mode == "sync") || !st.folders.is_empty()))>
+            <Show when=move || status.with(|st| st.as_ref().is_some_and(|st| st.mounted || !st.folders.is_empty()))>
                 <button on:click=move |_| spawn_local(async move {
                     if let Err(e) = invoke::<()>("activity_open", json!({})).await {
                         c.notify(e, true);

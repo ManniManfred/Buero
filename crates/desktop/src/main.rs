@@ -546,12 +546,12 @@ fn remove_tree(dir: &std::path::Path) -> std::io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Aktivität der Sync-Ordner
+// Aktivität der Sync-Ordner bzw. des Laufwerks
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct FolderActivity {
-    /// `None`: Sync-Ordner für alle Sammlungen
+    /// `None`: Sync-Ordner bzw. Laufwerk für alle Sammlungen
     collection_id: Option<i64>,
     name: String,
     path: String,
@@ -560,7 +560,7 @@ struct FolderActivity {
     state: Option<buero_vfs::SyncState>,
 }
 
-/// Alle eingerichteten Sync-Ordner mit Zustand und letzten Aktivitäten
+/// Alle eingerichteten Sync-Ordner (bzw. das Laufwerk) mit Zustand und letzten Aktivitäten
 #[tauri::command]
 fn sync_activity(app: tauri::AppHandle, st: State<'_, DriveState>) -> Vec<FolderActivity> {
     let s = load_settings(&app);

@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Manfred Roßkamp
 
 //! Desktop-Client: eigenes Fenster mit Zustand, letzten Aktivitäten und
-//! Fehlern der Sync-Ordner (aus dem Infobereich oder den Einstellungen).
+//! Fehlern der Sync-Ordner bzw. des Laufwerks (aus dem Infobereich oder den
+//! Einstellungen).
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -137,7 +138,7 @@ pub fn ActivityWindow() -> impl IntoView {
             <header class="activity-head">
                 <h2><Icon name="history" />"Synchronisierung"</h2>
                 <div class="button-row">
-                    <button on:click=sync_all title="Alle Sync-Ordner sofort abgleichen"><Icon name="rotate" />"Jetzt abgleichen"</button>
+                    <button on:click=sync_all title="Alles sofort abgleichen"><Icon name="rotate" />"Jetzt abgleichen"</button>
                     <button on:click=open_log title="Protokolldatei mit allen Aktivitäten und Fehlern öffnen"><Icon name="external" />"Protokoll"</button>
                 </div>
             </header>
@@ -149,7 +150,7 @@ pub fn ActivityWindow() -> impl IntoView {
             {move || match folders.get() {
                 None => view! { <p class="muted">"Wird geladen …"</p> }.into_any(),
                 Some(list) if list.is_empty() => view! {
-                    <p class="muted">"Es ist kein Sync-Ordner eingerichtet. Das geht in Büro unter Einstellungen."</p>
+                    <p class="muted">"Es ist kein Sync-Ordner bzw. Laufwerk eingerichtet. Das geht in Büro unter Einstellungen."</p>
                 }.into_any(),
                 Some(list) => list
                     .into_iter()
@@ -198,8 +199,8 @@ fn FolderCard(folder: Folder, only_errors: RwSignal<bool>, message: RwSignal<Opt
                 <strong>{name}</strong>
                 <span class=class>{status}</span>
                 <Show when=move || connected>
-                    <button class="icon" title="Ordner im Explorer öffnen" on:click=open><Icon name="folder-open" /></button>
-                    <button class="icon" title="Diesen Ordner sofort abgleichen" on:click=sync><Icon name="rotate" /></button>
+                    <button class="icon" title="Im Dateimanager öffnen" on:click=open><Icon name="folder-open" /></button>
+                    <button class="icon" title="Sofort abgleichen" on:click=sync><Icon name="rotate" /></button>
                 </Show>
             </div>
             <code class="small">{path}</code>

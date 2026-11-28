@@ -18,6 +18,9 @@
 //! Temporäre Dateien (Sperrdateien, `~$…`, `*.tmp`, versteckte Dateien) bleiben
 //! nur lokal. Damit funktionieren die üblichen Speichermuster von Office &
 //! Co. (in temporäre Datei schreiben, Original wegbenennen, umbenennen, löschen).
+//!
+//! Was geschieht (eigene Änderungen, Änderungen am Server, Fehler), landet im
+//! Aktivitätsprotokoll, sofern eines gesetzt ist (`with_log`).
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -27,7 +30,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use shared::{Collection, CollectionInput, DocumentSummary, DocumentUpdate};
 
+use crate::activity::SharedLog;
 use crate::client::{ApiError, Client};
+use crate::sync::{Act, ActKind, Pass};
 
 pub type Ino = u64;
 pub const ROOT_INO: Ino = 1;
@@ -35,6 +40,8 @@ pub const ROOT_INO: Ino = 1;
 pub const INBOX_NAME: &str = "Eingang";
 /// So lange gilt der geladene Stand, bevor er neu geholt wird
 const REFRESH_AFTER: Duration = Duration::from_secs(5);
+/// So lange gilt eine Änderung am Server als eigene (nicht als „vom Server“)
+const OWN_FOR: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Dir {
@@ -285,6 +292,120 @@ impl Snapshot {
     }
 }
 
+impl Snapshot {
+    /// Pfad eines Ordners im Laufwerk (Wurzel: leer)
+    pub(crate) fn dir_path(&self, dir: Dir) -> String {
+        let mut parts = Vec::new();
+        let mut cur = dir;
+        for _ in 0..64 {
+            let parent = match cur {
+                Dir::Root => break,
+                Dir::Inbox => Dir::Root,
+                Dir::Coll(c) => match self.colls.get(&c).and_then(|c| c.parent_id) {
+                    Some(p) if self.colls.contains_key(&p) => Dir::Coll(p),
+                    _ => Dir::Root,
+                },
+            };
+            match self.entries.get(&parent).and_then(|l| l.iter().find(|(_, e)| *e == Entry::Dir(cur))) {
+                Some((n, _)) => parts.push(n.clone()),
+                None => break,
+            }
+            cur = parent;
+        }
+        parts.reverse();
+        parts.join("/")
+    }
+
+    /// Pfad eines Eintrags in einem Ordner
+    pub(crate) fn path_in(&self, dir: Dir, name: &str) -> String {
+        let d = self.dir_path(dir);
+        if d.is_empty() { name.to_string() } else { format!("{d}/{name}") }
+    }
+
+    /// Pfad eines Dokuments (im ersten Ordner, in dem es liegt)
+    pub(crate) fn doc_path(&self, id: i64) -> Option<String> {
+        self.entries
+            .iter()
+            .filter_map(|(dir, l)| l.iter().find(|(_, e)| *e == Entry::Doc(id)).map(|(n, _)| (*dir, n)))
+            .min_by_key(|(dir, _)| match dir {
+                Dir::Root => -2,
+                Dir::Inbox => -1,
+                Dir::Coll(c) => *c,
+            })
+            .map(|(dir, n)| self.path_in(dir, n))
+    }
+}
+
+/// Von uns selbst geänderte Einträge (nicht als Änderung vom Server melden)
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Own {
+    Doc(i64),
+    Coll(i64),
+}
+
+/// Was sich zwischen zwei Ständen am Server geändert hat. Eigene Änderungen
+/// (`own`) werden übergangen und dabei aus `own` entfernt.
+pub(crate) fn server_changes(old: &Snapshot, new: &Snapshot, own: &mut HashMap<Own, Instant>) -> Vec<Act> {
+    own.retain(|_, t| t.elapsed() < OWN_FOR);
+    let mut acts = Vec::new();
+    let mut act = |kind, path: String, text: String| acts.push(Act { kind, path, text });
+    let mut sorted: Vec<&i64> = new.colls.keys().collect();
+    sorted.sort();
+    for id in sorted {
+        let c = &new.colls[id];
+        let mine = own.remove(&Own::Coll(*id)).is_some();
+        match old.colls.get(id) {
+            _ if mine => {}
+            None => act(ActKind::Download, new.dir_path(Dir::Coll(*id)), "Ordner angelegt".into()),
+            Some(o) if o.name != c.name || o.parent_id != c.parent_id => act(
+                ActKind::Change,
+                new.dir_path(Dir::Coll(*id)),
+                format!("Am Server umbenannt bzw. verschoben (vorher „{}“)", old.dir_path(Dir::Coll(*id))),
+            ),
+            Some(_) => {}
+        }
+    }
+    let mut sorted: Vec<&i64> = old.colls.keys().filter(|id| !new.colls.contains_key(id)).collect();
+    sorted.sort();
+    for id in sorted {
+        if own.remove(&Own::Coll(*id)).is_none() {
+            act(ActKind::Remove, old.dir_path(Dir::Coll(*id)), "Sammlung am Server gelöscht".into());
+        }
+    }
+    let mut sorted: Vec<&i64> = new.docs.keys().collect();
+    sorted.sort();
+    for id in sorted {
+        let d = &new.docs[id];
+        if own.remove(&Own::Doc(*id)).is_some() {
+            continue;
+        }
+        let path = new.doc_path(*id).unwrap_or_else(|| doc_file_name(d));
+        match old.docs.get(id) {
+            None => act(ActKind::Download, path, "Neu vom Server".into()),
+            Some(o) if o.version != d.version => act(ActKind::Download, path, "Neue Version vom Server".into()),
+            Some(o) if o.title != d.title || o.collection_ids != d.collection_ids => {
+                let before = old.doc_path(*id).unwrap_or_default();
+                let text = if before == path || before.is_empty() {
+                    "Am Server geändert".to_string()
+                } else {
+                    format!("Am Server umbenannt bzw. verschoben (vorher „{before}“)")
+                };
+                act(ActKind::Change, path, text)
+            }
+            Some(_) => {}
+        }
+    }
+    let mut sorted: Vec<&i64> = old.docs.keys().filter(|id| !new.docs.contains_key(id)).collect();
+    sorted.sort();
+    for id in sorted {
+        if own.remove(&Own::Doc(*id)).is_none() {
+            let path = old.doc_path(*id).unwrap_or_else(|| doc_file_name(&old.docs[id]));
+            act(ActKind::Remove, path, "Am Server entfernt".into());
+        }
+    }
+    acts
+}
+
 /// Bei Namensgleichheit (ohne Groß-/Kleinschreibung) die ID anhängen. Der
 /// gewählte Name wird in `taken` (klein geschrieben) vermerkt.
 fn unique(taken: &mut HashSet<String>, name: String, id: i64) -> String {
@@ -391,6 +512,10 @@ pub struct Vfs {
     refreshing: Mutex<()>,
     downloading: Mutex<()>,
     last_error: Mutex<Option<String>>,
+    /// Aktivitätsprotokoll (für das Fenster „Synchronisierung“)
+    log: Option<SharedLog>,
+    /// Eben selbst am Server geänderte Einträge
+    own: Mutex<HashMap<Own, Instant>>,
 }
 
 impl Vfs {
@@ -425,7 +550,37 @@ impl Vfs {
             refreshing: Mutex::new(()),
             downloading: Mutex::new(()),
             last_error: Mutex::new(None),
+            log: None,
+            own: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Aktivitäten und Fehler in dieses Protokoll schreiben
+    pub fn with_log(mut self, log: SharedLog) -> Self {
+        self.log = Some(log);
+        self
+    }
+
+    fn act(&self, kind: ActKind, path: impl Into<String>, text: impl Into<String>) {
+        if let Some(log) = &self.log {
+            log.lock().unwrap_or_else(|e| e.into_inner()).add(kind, path, text);
+        }
+    }
+
+    /// Eigene Änderung am Server vormerken
+    fn mine(&self, o: Own) {
+        self.own.lock().unwrap_or_else(|e| e.into_inner()).insert(o, Instant::now());
+    }
+
+    /// Pfad eines Eintrags im aktuellen Stand
+    fn path(&self, dir: Dir, name: &str) -> String {
+        self.lock().snap.path_in(dir, name)
+    }
+
+    /// Fehlgeschlagene Änderung am Server protokollieren
+    fn failed(&self, what: &str, path: &str, e: ApiError) -> Error {
+        self.act(ActKind::Error, path, format!("{what} fehlgeschlagen: {e}"));
+        e.into()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -439,6 +594,7 @@ impl Vfs {
 
     fn report(&self, msg: String) {
         log::warn!("Büro-Laufwerk: {msg}");
+        self.act(ActKind::Error, "", msg.clone());
         if let Ok(mut e) = self.last_error.lock() {
             *e = Some(msg);
         }
@@ -466,16 +622,35 @@ impl Vfs {
         if !force && fresh(&self.lock()) {
             return Ok(());
         }
+        if let Some(log) = &self.log {
+            log.lock().unwrap_or_else(|e| e.into_inner()).started();
+        }
         let loaded = self.client.collections().and_then(|c| Ok((c, self.client.all_documents()?)));
+        let finished = |res: std::result::Result<Pass, String>| {
+            if let Some(log) = &self.log {
+                log.lock().unwrap_or_else(|e| e.into_inner()).finished(&res);
+            }
+        };
         match loaded {
             Ok((colls, docs)) => {
-                let snap = Snapshot::build(colls, docs);
-                let mut st = self.lock();
-                st.snap = Arc::new(snap);
-                st.loaded = Some(Instant::now());
+                let snap = Arc::new(Snapshot::build(colls, docs));
+                let (old, first) = {
+                    let mut st = self.lock();
+                    let old = std::mem::replace(&mut st.snap, snap.clone());
+                    let first = st.loaded.is_none();
+                    st.loaded = Some(Instant::now());
+                    (old, first)
+                };
+                let activity = if first {
+                    Vec::new()
+                } else {
+                    server_changes(&old, &snap, &mut self.own.lock().unwrap_or_else(|e| e.into_inner()))
+                };
+                finished(Ok(Pass { activity, ..Default::default() }));
                 Ok(())
             }
             Err(e) => {
+                finished(Err(format!("Server nicht erreichbar: {e}")));
                 let mut st = self.lock();
                 if st.loaded.is_some() {
                     // Alten Stand weiter zeigen, später erneut versuchen
@@ -951,16 +1126,34 @@ impl Vfs {
 
     /// Datei als neue Version speichern; bei Konflikt als eigenes Dokument daneben
     fn save_version(&self, dir: Dir, id: i64, path: &Path, base: Option<i64>) -> Result<DocumentSummary> {
-        let doc = self.lock().snap.docs.get(&id).cloned().ok_or(Error::NotFound)?;
+        let (doc, shown) = {
+            let st = self.lock();
+            let doc = st.snap.docs.get(&id).cloned().ok_or(Error::NotFound)?;
+            let name = self.name_of_doc(&st, dir, id).unwrap_or_else(|| doc_file_name(&doc));
+            (doc, st.snap.path_in(dir, &name))
+        };
         let res = match self.client.new_version(id, path, &doc.original_filename, base) {
             Err(e) if e.status == Some(409) => {
                 let title = format!("{} (Konflikt)", doc.title);
-                self.report(format!("„{}“ wurde inzwischen anderswo geändert – gespeichert als „{title}“", doc.title));
-                self.client.upload(path, &doc.original_filename, &title, &dir.collection().into_iter().collect::<Vec<_>>())
+                log::warn!("Büro-Laufwerk: „{}“ wurde inzwischen anderswo geändert – gespeichert als „{title}“", doc.title);
+                if let Ok(mut e) = self.last_error.lock() {
+                    *e = Some(format!("„{}“ wurde inzwischen anderswo geändert – gespeichert als „{title}“", doc.title));
+                }
+                let r = self.client.upload(path, &doc.original_filename, &title, &dir.collection().into_iter().collect::<Vec<_>>());
+                if let Ok(d) = &r {
+                    self.mine(Own::Doc(d.id));
+                    self.act(ActKind::Upload, shown.clone(), format!("Als Konflikt-Kopie „{title}“ hochgeladen"));
+                }
+                r
+            }
+            Ok(d) => {
+                self.mine(Own::Doc(d.id));
+                self.act(ActKind::Upload, shown.clone(), "Neue Version hochgeladen");
+                Ok(d)
             }
             r => r,
         };
-        let res = res.map_err(Error::from);
+        let res = res.map_err(|e| self.failed("Hochladen", &shown, e));
         let _ = self.refresh(true);
         res
     }
@@ -977,7 +1170,10 @@ impl Vfs {
             Some(t) => self.save_version(dir, t, &path, None)?,
             None => {
                 let colls: Vec<i64> = dir.collection().into_iter().collect();
-                let d = self.client.upload(&path, &name, stem(&name), &colls)?;
+                let shown = self.path(if dir == Dir::Root { Dir::Inbox } else { dir }, &name);
+                let d = self.client.upload(&path, &name, stem(&name), &colls).map_err(|e| self.failed("Hochladen", &shown, e))?;
+                self.mine(Own::Doc(d.id));
+                self.act(ActKind::Upload, shown, "Hochgeladen");
                 let _ = self.refresh(true);
                 d
             }
@@ -1036,15 +1232,28 @@ impl Vfs {
 
     /// Dokument aus dem Ordner entfernen: aus der Sammlung nehmen bzw. im Eingang löschen
     fn remove_doc(&self, dir: Dir, id: i64) -> Result<()> {
-        let doc = self.lock().snap.docs.get(&id).cloned().ok_or(Error::NotFound)?;
-        match dir {
+        let (doc, shown) = {
+            let st = self.lock();
+            let doc = st.snap.docs.get(&id).cloned().ok_or(Error::NotFound)?;
+            let name = self.name_of_doc(&st, dir, id).unwrap_or_else(|| doc_file_name(&doc));
+            (doc, st.snap.path_in(dir, &name))
+        };
+        let text = match dir {
             Dir::Coll(c) => {
                 let ids: Vec<i64> = doc.collection_ids.iter().copied().filter(|x| *x != c).collect();
-                self.client.update_document(id, &DocumentUpdate { collection_ids: Some(ids), ..Default::default() })?;
+                self.client
+                    .update_document(id, &DocumentUpdate { collection_ids: Some(ids), ..Default::default() })
+                    .map_err(|e| self.failed("Entfernen", &shown, e))?;
+                "Aus der Sammlung entfernt"
             }
-            Dir::Inbox => self.client.delete_document(id)?,
+            Dir::Inbox => {
+                self.client.delete_document(id).map_err(|e| self.failed("Löschen", &shown, e))?;
+                "Am Server gelöscht"
+            }
             Dir::Root => return Err(Error::Perm),
-        }
+        };
+        self.mine(Own::Doc(id));
+        self.act(ActKind::Remove, shown, text);
         self.refresh(true)
     }
 
@@ -1064,7 +1273,10 @@ impl Vfs {
         if name != sanitize_name(name) {
             return Err(Error::Invalid);
         }
-        let c = self.client.create_collection(name, dir.collection())?;
+        let shown = self.path(dir, name);
+        let c = self.client.create_collection(name, dir.collection()).map_err(|e| self.failed("Ordner anlegen", &shown, e))?;
+        self.mine(Own::Coll(c.id));
+        self.act(ActKind::Upload, shown, "Als Sammlung angelegt");
         self.refresh(true)?;
         let mut st = self.lock();
         let key = Key::Dir(Dir::Coll(c.id));
@@ -1090,7 +1302,10 @@ impl Vfs {
                 _ => return Err(Error::NotDir),
             }
         };
-        self.client.delete_collection(c)?;
+        let shown = self.lock().snap.dir_path(Dir::Coll(c));
+        self.client.delete_collection(c).map_err(|e| self.failed("Ordner löschen", &shown, e))?;
+        self.mine(Own::Coll(c));
+        self.act(ActKind::Remove, shown, "Sammlung gelöscht");
         self.refresh(true)
     }
 
@@ -1147,7 +1362,13 @@ impl Vfs {
             color: None,
             ai_locked: None,
         };
-        self.client.update_collection(c, &input)?;
+        let (before, after) = {
+            let st = self.lock();
+            (st.snap.dir_path(d), st.snap.path_in(newdir, newname))
+        };
+        self.client.update_collection(c, &input).map_err(|e| self.failed("Umbenennen", &before, e))?;
+        self.mine(Own::Coll(c));
+        self.act(ActKind::Change, after, format!("Sammlung umbenannt bzw. verschoben (vorher „{before}“)"));
         self.refresh(true)
     }
 
@@ -1212,7 +1433,19 @@ impl Vfs {
             }
             u.collection_ids = Some(ids);
         }
-        self.client.update_document(id, &u)?;
+        let before = self.path(dir, cur_name.as_deref().unwrap_or(newname));
+        let after = self.path(newdir, newname);
+        let what = match (u.title.is_some(), u.collection_ids.is_some()) {
+            (false, false) => None,
+            (true, true) => Some("Umbenannt und verschoben"),
+            (true, false) => Some("Umbenannt"),
+            (false, true) => Some("Verschoben"),
+        };
+        self.client.update_document(id, &u).map_err(|e| self.failed("Umbenennen", &before, e))?;
+        if let Some(what) = what {
+            self.mine(Own::Doc(id));
+            self.act(ActKind::Change, after, format!("{what} (vorher „{before}“)"));
+        }
         self.refresh(true)?;
         let mut st = self.lock();
         if let Some(ino) = st.inodes.remove(&Key::Doc(dir, id)) {
@@ -1390,6 +1623,49 @@ mod tests {
         assert_eq!(names(Dir::Coll(1)), ["Rechnungen", "A.pdf"]);
         assert_eq!(names(Dir::Coll(2)), ["A.pdf", "A (11).pdf"]);
         assert_eq!(names(Dir::Inbox), ["Neu.txt"]);
+    }
+
+    #[test]
+    fn paths() {
+        let s = Snapshot::build(
+            vec![coll(1, None, "Finanzen"), coll(2, Some(1), "Rechnungen")],
+            vec![doc(10, "A", "a.pdf", &[2]), doc(12, "Neu", "n.txt", &[])],
+        );
+        assert_eq!(s.dir_path(Dir::Root), "");
+        assert_eq!(s.dir_path(Dir::Coll(2)), "Finanzen/Rechnungen");
+        assert_eq!(s.doc_path(10).as_deref(), Some("Finanzen/Rechnungen/A.pdf"));
+        assert_eq!(s.doc_path(12).as_deref(), Some("Eingang/Neu.txt"));
+    }
+
+    #[test]
+    fn changes_from_server() {
+        let old = Snapshot::build(
+            vec![coll(1, None, "Finanzen"), coll(2, None, "Alt")],
+            vec![doc(10, "A", "a.pdf", &[1]), doc(11, "B", "b.pdf", &[1]), doc(12, "C", "c.pdf", &[]), doc(13, "D", "d.pdf", &[])],
+        );
+        let mut b = doc(11, "B", "b.pdf", &[1]);
+        b.version = 2;
+        let new = Snapshot::build(
+            vec![coll(1, None, "Geld"), coll(3, None, "Neu")],
+            vec![doc(10, "A", "a.pdf", &[1]), b, doc(13, "D2", "d.pdf", &[]), doc(14, "E", "e.pdf", &[3]), doc(15, "F", "f.pdf", &[])],
+        );
+        // Eigene Änderung (Dokument 15) wird nicht gemeldet
+        let mut own = HashMap::from([(Own::Doc(15), Instant::now())]);
+        let acts = server_changes(&old, &new, &mut own);
+        let got: Vec<(ActKind, &str, &str)> = acts.iter().map(|a| (a.kind, a.path.as_str(), a.text.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                (ActKind::Change, "Geld", "Am Server umbenannt bzw. verschoben (vorher „Finanzen“)"),
+                (ActKind::Download, "Neu", "Ordner angelegt"),
+                (ActKind::Remove, "Alt", "Sammlung am Server gelöscht"),
+                (ActKind::Download, "Geld/B.pdf", "Neue Version vom Server"),
+                (ActKind::Change, "Eingang/D2.pdf", "Am Server umbenannt bzw. verschoben (vorher „Eingang/D.pdf“)"),
+                (ActKind::Download, "Neu/E.pdf", "Neu vom Server"),
+                (ActKind::Remove, "Eingang/C.pdf", "Am Server entfernt"),
+            ]
+        );
+        assert!(own.is_empty());
     }
 
     #[test]

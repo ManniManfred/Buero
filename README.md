@@ -382,6 +382,8 @@ wieder trennt bzw. aushängt.
   (geladene Dateien bleiben). Wird die Sammlung am Server gelöscht, bleibt der
   Ordner unangetastet und die Einstellungen melden das.
 - **Linux:** als Laufwerk in einem Ordner, standardmäßig `~/Büro` (FUSE).
+  Dateien werden beim Öffnen geladen und beim Schließen hochgeladen; den
+  Stand am Server holt das Laufwerk bei Zugriffen, sonst alle 20 Sekunden.
 
 Abgeglichen wird, solange Büro läuft. Ist ein Sync-Ordner oder Laufwerk
 verbunden, schließt „Schließen“ nur das Fenster; Büro bleibt im Infobereich
@@ -392,9 +394,10 @@ nötig ist oder nichts abzugleichen ist.
 
 Was gerade passiert, zeigt das Fenster „Synchronisierung“ (im Menü des
 Infobereichs oder in den Einstellungen unter „Aktivität und
-Fehlerprotokoll“): je Sync-Ordner der Zustand, aktuelle Probleme und die
-letzten Aktivitäten (hochgeladen, vom Server übernommen, umbenannt,
-entfernt, Fehler); „Jetzt abgleichen“ startet sofort einen Durchlauf. Alles
+Fehlerprotokoll“): je Sync-Ordner bzw. für das Laufwerk der Zustand,
+aktuelle Probleme und die letzten Aktivitäten (hochgeladen, vom Server
+übernommen, umbenannt, entfernt, Fehler); „Jetzt abgleichen“ startet sofort
+einen Durchlauf (Laufwerk: lädt den Stand vom Server neu). Alles
 wird außerdem in eine Protokolldatei geschrieben (`sync.log` im
 Zwischenspeicher, Knopf „Protokoll“); Fehler, die bei jedem Durchlauf
 wiederkehren, stehen dort nur einmal.

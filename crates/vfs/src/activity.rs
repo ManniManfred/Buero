@@ -186,6 +186,7 @@ impl ActivityLog {
         self.errors = errors;
     }
 
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn errors(&self) -> &[String] {
         &self.errors
     }
